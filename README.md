@@ -3,10 +3,10 @@
 TeamSync turns meeting transcripts into structured, portable data and keeps
 track of the commitments people make in meetings.
 
-The core idea is simple: **Markdown is the source of truth.** Every meeting
-produces three Markdown documents — structured minutes, an action-item table,
+The core idea is simple: **Meeting transcript is the source of truth.** Every meeting
+produces three documents — structured minutes, an action-item table,
 and a next-meeting agenda — which are then tracked, searched, and exported to
-Word, Markdown, an Outlook calendar event, or an email draft.
+Word, an Outlook calendar event, or an email draft.
 
 ## Capabilities
 
