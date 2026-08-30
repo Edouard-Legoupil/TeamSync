@@ -8,6 +8,17 @@ produces three documents — structured minutes, an action-item table,
 and a next-meeting agenda — which are then tracked, searched, and exported to
 Word, an Outlook calendar event, or an email draft.
 
+![overview](https://raw.githubusercontent.com/Edouard-Legoupil/TeamSync/refs/heads/main/docs/Screenshot1.png) 
+
+![overview](https://raw.githubusercontent.com/Edouard-Legoupil/TeamSync/refs/heads/main/docs/Screenshot2.png) 
+
+![overview](https://raw.githubusercontent.com/Edouard-Legoupil/TeamSync/refs/heads/main/docs/Screenshot3.png) 
+
+![overview](https://raw.githubusercontent.com/Edouard-Legoupil/TeamSync/refs/heads/main/docs/Screenshot4.png) 
+
+![overview](https://raw.githubusercontent.com/Edouard-Legoupil/TeamSync/refs/heads/main/docs/Screenshot5.png) 
+
+
 ## Capabilities
 
 **Capture**
