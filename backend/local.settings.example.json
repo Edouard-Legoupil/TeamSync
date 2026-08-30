@@ -1,0 +1,18 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "DATABASE_URL": "sqlite:///./teamsync.db",
+    "AZURE_AD_TENANT_ID": "",
+    "AZURE_AD_CLIENT_ID": "",
+    "AZURE_AD_CLIENT_SECRET": "",
+    "AZURE_AD_REDIRECT_URI": "http://localhost:8000/api/auth/callback",
+    "JWT_SECRET_KEY": "dev-only-secret-change-me",
+    "OPENAI_API_KEY": "",
+    "OPENAI_MODEL": "gpt-4o-mini",
+    "FRONTEND_URL": "http://localhost:8000",
+    "CORS_ORIGINS": "http://localhost:5173,http://localhost:8000",
+    "ALLOW_DEV_LOGIN": "false"
+  }
+}
