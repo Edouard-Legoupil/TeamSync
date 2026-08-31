@@ -3,3 +3,8 @@ dist
 dist-ssr
 *.local
 .DS_Store
+
+# The root .gitignore ignores any directory named "lib" (Python venv
+# convention); re-include the frontend's src/lib utility directory.
+!src/lib/
+!src/lib/**
