@@ -15,10 +15,24 @@ from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 
-from app.api.helpers import action_item_out, today_in_app_tz  # noqa: E402
-from app.auth.dependencies import get_accessible_team_ids  # noqa: E402
+from app.api.helpers import (
+    action_item_out,
+    meeting_list_row_out,
+    meeting_summary_out,
+    today_in_app_tz,
+)  # noqa: E402
+from app.auth.dependencies import get_accessible_team_ids, get_meeting_role  # noqa: E402
 from app.database import Base  # noqa: E402
-from app.models import ActionItem, Meeting, Team, TeamMember, User  # noqa: E402
+from app.models import (  # noqa: E402
+    ActionItem,
+    Meeting,
+    MeetingPermission,
+    MeetingSeries,
+    Tag,
+    Team,
+    TeamMember,
+    User,
+)
 from app.models.enums import (  # noqa: E402
     ActionItemPriority,
     ActionItemStatus,
@@ -29,7 +43,17 @@ from app.models.enums import (  # noqa: E402
 from app.services.email_draft import build_email_draft, markdown_to_text  # noqa: E402
 from app.services.markdown_sync import sync_action_item_to_markdown  # noqa: E402
 from app.services.outlook import build_ics  # noqa: E402
-from app.services.processing import _find_duplicate, _normalize  # noqa: E402
+from app.services.processing import (  # noqa: E402
+    _find_duplicate,
+    _follow_ups_to_markdown,
+    _normalize,
+    _parse_follow_ups,
+    _parse_meeting_date,
+)
+from app.services.tagging import parse_action_item_tags, upsert_tag  # noqa: E402
+from app.services.transcript_parser import find_evidence, parse_segments  # noqa: E402
+from app.services.notifications import notify_mentions  # noqa: E402
+from app.api.routes.analytics import _group_tags  # noqa: E402
 from app.services.word_export import markdown_to_docx_bytes  # noqa: E402
 
 
@@ -168,6 +192,360 @@ class TestDueFlags(BaseTestCase):
         self.assertTrue(o.overdue and not o.due_soon)
         self.assertTrue(s.due_soon and not s.overdue)
         self.assertFalse(f.overdue or f.due_soon)
+
+
+class TestActionItemContext(BaseTestCase):
+    def test_identification_fields(self):
+        team = self._team("Ops")
+        series = MeetingSeries(name="Weekly Ops", team_id=team.id)
+        self.db.add(series)
+        self.db.flush()
+
+        meeting = self._meeting(team, "Ops Standup")
+        meeting.series_id = series.id
+        assigned = ActionItem(
+            meeting_id=meeting.id,
+            description="Do the thing",
+            assignee_id=self.admin.id,
+            status=ActionItemStatus.OPEN.value,
+        )
+        self.db.add(assigned)
+        self.db.flush()
+
+        out = action_item_out(assigned)
+        self.assertEqual(out.team_id, team.id)
+        self.assertEqual(out.team_name, "Ops")
+        self.assertEqual(out.series_id, series.id)
+        self.assertEqual(out.series_name, "Weekly Ops")
+        self.assertEqual(out.meeting_title, "Ops Standup")
+        self.assertEqual(out.assignee_name, "Admin")
+
+    def test_unassigned_and_no_series(self):
+        team = self._team("Ops")
+        meeting = self._meeting(team, "Ad hoc")
+        item = ActionItem(
+            meeting_id=meeting.id,
+            description="Someone must do this",
+            status=ActionItemStatus.OPEN.value,
+        )
+        self.db.add(item)
+        self.db.flush()
+
+        out = action_item_out(item)
+        self.assertIsNone(out.assignee_name)
+        self.assertIsNone(out.series_id)
+        self.assertIsNone(out.series_name)
+        self.assertEqual(out.team_name, "Ops")
+        self.assertEqual(out.meeting_title, "Ad hoc")
+
+
+class TestMeetingContext(BaseTestCase):
+    def test_meeting_summary_out(self):
+        team = self._team("Ops")
+        series = MeetingSeries(name="Weekly Ops", team_id=team.id)
+        self.db.add(series)
+        self.db.flush()
+        meeting = self._meeting(team, "Ops Standup")
+        meeting.series_id = series.id
+        self.db.flush()
+
+        summary = meeting_summary_out(meeting)
+        self.assertEqual(summary.team_name, "Ops")
+        self.assertEqual(summary.series_name, "Weekly Ops")
+        self.assertEqual(summary.id, meeting.id)
+
+    def test_meeting_list_row_out(self):
+        team = self._team("Ops")
+        meeting = self._meeting(team, "Ops Standup")
+        item = ActionItem(
+            meeting_id=meeting.id,
+            description="Do the thing",
+            status=ActionItemStatus.OPEN.value,
+        )
+        self.db.add(item)
+        self.db.flush()
+
+        row = meeting_list_row_out(meeting)
+        self.assertEqual(row.team_name, "Ops")
+        self.assertEqual(row.action_count, 1)
+
+    def test_parse_meeting_date(self):
+        self.assertIsNone(_parse_meeting_date(None))
+        self.assertIsNone(_parse_meeting_date(""))
+        self.assertIsNone(_parse_meeting_date("not a date"))
+        parsed = _parse_meeting_date("2026-08-31")
+        self.assertIsNotNone(parsed)
+        self.assertEqual((parsed.year, parsed.month, parsed.day), (2026, 8, 31))
+
+
+class TestTagging(BaseTestCase):
+    def test_upsert_tag_first_write_wins(self):
+        first = upsert_tag(self.db, "Fundraising", "thematic")
+        second = upsert_tag(self.db, "fundraising", "geographic")
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(first.type, "thematic")
+        self.db.commit()
+        self.assertEqual(self.db.query(Tag).count(), 1)
+
+    def test_parse_action_item_tags(self):
+        parsed = parse_action_item_tags(
+            [
+                {
+                    "task": "Share flexible funding report",
+                    "tags": [{"name": "Reporting", "type": "process"}, {"name": "MENA"}],
+                },
+                {"task": "Fix generator", "tags": ["RAF"]},
+            ]
+        )
+        self.assertEqual(
+            parsed["share flexible funding report"][0],
+            {"name": "Reporting", "type": "process"},
+        )
+        self.assertEqual(
+            parsed["fix generator"][0], {"name": "RAF", "type": "thematic"}
+        )
+
+    def test_action_item_out_includes_tags(self):
+        team = self._team()
+        meeting = self._meeting(team)
+        item = ActionItem(
+            meeting_id=meeting.id,
+            description="Do the thing",
+            status=ActionItemStatus.OPEN.value,
+        )
+        tag = upsert_tag(self.db, "Fundraising", "thematic")
+        item.tags.append(tag)
+        self.db.add(item)
+        self.db.flush()
+
+        out = action_item_out(item)
+        self.assertEqual([t.name for t in out.tags], ["Fundraising"])
+        self.assertEqual(out.tags[0].type, "thematic")
+
+
+class TestTranscriptParser(BaseTestCase):
+    def test_vtt_with_speakers(self):
+        raw = (
+            "WEBVTT\n\n"
+            "00:14:23.000 --> 00:14:26.000\n"
+            "Laurie: I need the flexible funding report\n\n"
+            "00:14:30.000 --> 00:14:33.000\n"
+            "Sam: I will share it\n"
+        )
+        result = parse_segments(raw)
+        self.assertTrue(result["has_speakers"])
+        self.assertTrue(result["has_timestamps"])
+        self.assertEqual(result["segments"][0]["speaker"], "Laurie")
+        self.assertEqual(result["segments"][0]["timestamp"], "00:14:23")
+
+    def test_bracketed_timestamp(self):
+        result = parse_segments("[14:23] Laurie: hello there")
+        seg = result["segments"][0]
+        self.assertEqual(seg["speaker"], "Laurie")
+        self.assertEqual(seg["timestamp"], "14:23")
+
+    def test_find_evidence(self):
+        segs = parse_segments("[14:23] Laurie: I need the flexible funding report")[
+            "segments"
+        ]
+        ev = find_evidence(segs, "flexible funding report")
+        self.assertEqual(ev["speaker"], "Laurie")
+        self.assertEqual(ev["timestamp"], "14:23")
+
+    def test_no_cues(self):
+        result = parse_segments("Just plain prose with no structure.")
+        self.assertFalse(result["has_speakers"])
+        self.assertFalse(result["has_timestamps"])
+
+
+class TestActionItemEvidence(BaseTestCase):
+    def test_action_item_out_evidence(self):
+        team = self._team()
+        meeting = self._meeting(team)
+        item = ActionItem(
+            meeting_id=meeting.id,
+            description="Share report",
+            status=ActionItemStatus.OPEN.value,
+            source_speaker="Laurie",
+            source_timestamp="14:23",
+            confidence=0.9,
+            attribution_method="transcript",
+            requester="Rep",
+            related_participants=["MENA", "DIPS"],
+            completion_notes="Sent to team",
+        )
+        self.db.add(item)
+        self.db.flush()
+
+        out = action_item_out(item)
+        self.assertEqual(out.source_speaker, "Laurie")
+        self.assertEqual(out.confidence, 0.9)
+        self.assertEqual(out.attribution_method, "transcript")
+        self.assertEqual(out.related_participants, ["MENA", "DIPS"])
+        self.assertEqual(out.completion_notes, "Sent to team")
+
+
+class TestNotifications(BaseTestCase):
+    def test_mention_resolution(self):
+        team = self._team("Ops")
+        member = User(
+            email="laurie@example.org",
+            full_name="Laurie Smith",
+            role=UserRole.MEMBER.value,
+        )
+        self.db.add(member)
+        self.db.flush()
+        self.db.add(
+            TeamMember(
+                team_id=team.id,
+                user_id=member.id,
+                role=TeamMemberRole.CONTRIBUTOR.value,
+            )
+        )
+        meeting = self._meeting(team)
+        item = ActionItem(
+            meeting_id=meeting.id,
+            description="Do the thing",
+            status=ActionItemStatus.OPEN.value,
+        )
+        self.db.add(item)
+        self.db.flush()
+
+        created = notify_mentions(
+            self.db, actor=self.admin, action_item=item, body="please handle @Laurie"
+        )
+        self.db.commit()
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].recipient_id, member.id)
+        self.assertEqual(created[0].meeting_id, meeting.id)
+
+    def test_mention_skips_self_and_unknown(self):
+        team = self._team("Ops")
+        meeting = self._meeting(team)
+        item = ActionItem(
+            meeting_id=meeting.id,
+            description="Do the thing",
+            status=ActionItemStatus.OPEN.value,
+        )
+        self.db.add(item)
+        self.db.flush()
+
+        self.assertEqual(
+            notify_mentions(
+                self.db, actor=self.admin, action_item=item, body="cc @Admin @nobody"
+            ),
+            [],
+        )
+
+
+class TestMeetingPermissions(BaseTestCase):
+    def test_organizer_is_owner(self):
+        team = self._team("Ops")
+        meeting = self._meeting(team)
+        meeting.organizer_id = self.admin.id
+        self.db.flush()
+        self.assertEqual(get_meeting_role(self.db, self.admin, meeting), "owner")
+
+    def test_team_member_roles(self):
+        team = self._team("Ops")
+        lead = User(
+            email="lead@example.org", full_name="Lead", role=UserRole.MEMBER.value
+        )
+        contributor = User(
+            email="contrib@example.org", full_name="Contrib", role=UserRole.MEMBER.value
+        )
+        viewer = User(
+            email="viewer@example.org", full_name="Viewer", role=UserRole.MEMBER.value
+        )
+        self.db.add_all([lead, contributor, viewer])
+        self.db.flush()
+        self.db.add_all(
+            [
+                TeamMember(
+                    team_id=team.id, user_id=lead.id, role=TeamMemberRole.LEAD.value
+                ),
+                TeamMember(
+                    team_id=team.id,
+                    user_id=contributor.id,
+                    role=TeamMemberRole.CONTRIBUTOR.value,
+                ),
+                TeamMember(
+                    team_id=team.id, user_id=viewer.id, role=TeamMemberRole.VIEWER.value
+                ),
+            ]
+        )
+        meeting = self._meeting(team)
+        self.db.flush()
+
+        self.assertEqual(get_meeting_role(self.db, lead, meeting), "owner")
+        self.assertEqual(
+            get_meeting_role(self.db, contributor, meeting), "contributor"
+        )
+        self.assertEqual(get_meeting_role(self.db, viewer, meeting), "viewer")
+
+    def test_explicit_permission_override(self):
+        team = self._team("Ops")
+        viewer = User(
+            email="viewer@example.org", full_name="Viewer", role=UserRole.MEMBER.value
+        )
+        self.db.add(viewer)
+        self.db.flush()
+        self.db.add(
+            TeamMember(
+                team_id=team.id, user_id=viewer.id, role=TeamMemberRole.VIEWER.value
+            )
+        )
+        meeting = self._meeting(team)
+        self.db.flush()
+        self.db.add(
+            MeetingPermission(meeting_id=meeting.id, user_id=viewer.id, role="owner")
+        )
+        self.db.flush()
+
+        self.assertEqual(get_meeting_role(self.db, viewer, meeting), "owner")
+
+
+class TestFollowUps(BaseTestCase):
+    def test_parse_and_render(self):
+        parsed = _parse_follow_ups(
+            [
+                {
+                    "follow_up_type": "meeting",
+                    "title": "Sync on RAF",
+                    "participants": ["Laurie", "Ops"],
+                    "rationale": "RAF questions",
+                },
+                {"follow_up_type": "email", "title": "Send report"},
+                {"follow_up_type": "bogus", "title": "Bad type"},
+            ]
+        )
+        self.assertEqual(len(parsed), 3)
+        self.assertEqual(parsed[0]["follow_up_type"], "meeting")
+        self.assertEqual(parsed[2]["follow_up_type"], "ad_hoc")
+        md = _follow_ups_to_markdown(parsed)
+        self.assertIn("## Suggested Follow-Up", md)
+        self.assertIn("Sync on RAF", md)
+
+
+class TestAnalyticsHelpers(BaseTestCase):
+    def test_group_tags_by_type(self):
+        team = self._team()
+        meeting = self._meeting(team)
+        item = ActionItem(
+            meeting_id=meeting.id,
+            description="Share report",
+            status=ActionItemStatus.OPEN.value,
+        )
+        tag = Tag(name="RAF", type="thematic")
+        item.tags.append(tag)
+        self.db.add(item)
+        self.db.flush()
+
+        thematic = _group_tags([item], "thematic")
+        self.assertEqual(len(thematic), 1)
+        self.assertEqual(thematic[0].label, "RAF")
+        self.assertEqual(thematic[0].count, 1)
+        self.assertEqual(_group_tags([item], "geographic"), [])
 
 
 class TestExport(BaseTestCase):
