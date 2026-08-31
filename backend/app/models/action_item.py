@@ -3,15 +3,18 @@ from __future__ import annotations
 from datetime import date
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Date, ForeignKey, String, Text
+from sqlalchemy import Date, Float, ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 from app.models.base import TimestampMixin, new_id
 from app.models.enums import ActionItemPriority, ActionItemStatus
+from app.models.tag import action_item_tags
 
 if TYPE_CHECKING:
+    from app.models.action_item_comment import ActionItemComment
     from app.models.meeting import Meeting
+    from app.models.tag import Tag
     from app.models.user import User
 
 
@@ -41,6 +44,18 @@ class ActionItem(TimestampMixin, Base):
         String(32), default=ActionItemStatus.OPEN.value, nullable=False
     )
     source_markdown: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Transcript evidence & traceability (#4, #7).
+    source_excerpt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_speaker: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_timestamp: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    attribution_method: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    requester: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    related_participants: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    # Completion narrative (#5), recorded when an item is closed.
+    completion_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    completion_links: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    completion_follow_up: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Points at an existing open ActionItem (in another meeting) that this one
     # duplicates. Deduplication keeps the tracker free of double-counted items.
     duplicate_of_id: Mapped[Optional[str]] = mapped_column(
@@ -54,4 +69,10 @@ class ActionItem(TimestampMixin, Base):
     )
     duplicate_of: Mapped[Optional["ActionItem"]] = relationship(
         remote_side=[id], foreign_keys=[duplicate_of_id]
+    )
+    comments: Mapped[list["ActionItemComment"]] = relationship(
+        back_populates="action_item", cascade="all, delete-orphan"
+    )
+    tags: Mapped[list["Tag"]] = relationship(
+        secondary=action_item_tags, back_populates="action_items"
     )

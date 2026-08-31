@@ -33,3 +33,11 @@ class ActionItemPriority(str, Enum):
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
+
+
+class TagType(str, Enum):
+    THEMATIC = "thematic"
+    ORGANIZATIONAL = "organizational"
+    GEOGRAPHIC = "geographic"
+    PROCESS = "process"
+    BEHAVIOR = "behavior"

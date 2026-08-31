@@ -27,6 +27,8 @@ class Team(TimestampMixin, Base):
     parent_team_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("teams.id", ondelete="SET NULL"), nullable=True
     )
+    # Workspace kind: team | personal | project | donor | operation.
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default="team")
 
     # --- relationships ------------------------------------------------------
     manager: Mapped[Optional["User"]] = relationship(

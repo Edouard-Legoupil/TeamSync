@@ -61,7 +61,20 @@ def _ensure_dev_columns() -> None:
 
     inspector = inspect(engine)
     _ensure_column(inspector, "meetings", "series_id", "VARCHAR(36)")
+    _ensure_column(inspector, "meetings", "source_filename", "VARCHAR(500)")
+    _ensure_column(inspector, "teams", "kind", "VARCHAR(32)")
     _ensure_column(inspector, "action_items", "duplicate_of_id", "VARCHAR(36)")
+    _ensure_column(inspector, "action_item_comments", "parent_id", "VARCHAR(36)")
+    _ensure_column(inspector, "action_items", "source_excerpt", "TEXT")
+    _ensure_column(inspector, "action_items", "source_speaker", "VARCHAR(255)")
+    _ensure_column(inspector, "action_items", "source_timestamp", "VARCHAR(64)")
+    _ensure_column(inspector, "action_items", "confidence", "FLOAT")
+    _ensure_column(inspector, "action_items", "attribution_method", "VARCHAR(32)")
+    _ensure_column(inspector, "action_items", "requester", "VARCHAR(255)")
+    _ensure_column(inspector, "action_items", "related_participants", "JSON")
+    _ensure_column(inspector, "action_items", "completion_notes", "TEXT")
+    _ensure_column(inspector, "action_items", "completion_links", "TEXT")
+    _ensure_column(inspector, "action_items", "completion_follow_up", "TEXT")
 
 
 def _ensure_column(inspector, table: str, column: str, ddl_type: str) -> None:

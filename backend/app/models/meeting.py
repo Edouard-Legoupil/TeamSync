@@ -43,6 +43,9 @@ class Meeting(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(
         String(32), default=MeetingStatus.DRAFT.value, nullable=False
     )
+    # Original uploaded filename (null for pasted transcripts), used for the
+    # transcript download link.
+    source_filename: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
     # --- content ------------------------------------------------------------
     raw_transcript: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -58,5 +61,8 @@ class Meeting(TimestampMixin, Base):
     organizer: Mapped[Optional["User"]] = relationship(back_populates="organized_meetings")
     series: Mapped[Optional["MeetingSeries"]] = relationship(back_populates="meetings")
     action_items: Mapped[list["ActionItem"]] = relationship(
+        back_populates="meeting", cascade="all, delete-orphan"
+    )
+    follow_ups: Mapped[list["MeetingFollowUp"]] = relationship(
         back_populates="meeting", cascade="all, delete-orphan"
     )
