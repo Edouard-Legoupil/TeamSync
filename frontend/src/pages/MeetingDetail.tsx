@@ -302,6 +302,17 @@ export default function MeetingDetail() {
     }
   }
 
+  async function refreshFollowUps() {
+    if (!id) return
+    try {
+      await api.post(`/meetings/${id}/follow-ups/refresh`)
+      toast('Follow-ups refreshing…', 'info')
+      window.setTimeout(() => load(), 2500)
+    } catch {
+      toast('Could not refresh follow-ups', 'error')
+    }
+  }
+
   function startEdit() {
     setDraftMinutes(meeting?.minutes_markdown ?? '')
     setEditing(true)
@@ -564,6 +575,14 @@ export default function MeetingDetail() {
 
             {tab === 'agenda' && (
               <div className="max-w-[800px]">
+                {isOwner && !notReady && (
+                  <div className="mb-3 flex justify-end">
+                    <Button variant="secondary" onClick={refreshFollowUps}>
+                      <RefreshCw className="h-4 w-4" />
+                      Refresh follow-ups
+                    </Button>
+                  </div>
+                )}
                 {meeting.follow_ups.length ? (
                   <ul className="space-y-3">
                     {meeting.follow_ups.map((fu) => (

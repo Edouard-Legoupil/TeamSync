@@ -330,6 +330,50 @@ def process_meeting(meeting_id: str) -> None:
         db.close()
 
 
+def _build_follow_up_context(db: Session, meeting: Meeting) -> str:
+    parts: list[str] = []
+    if meeting.minutes_markdown:
+        parts.append(meeting.minutes_markdown)
+    if meeting.action_items_markdown:
+        parts.append(meeting.action_items_markdown)
+
+    items = db.query(ActionItem).filter(ActionItem.meeting_id == meeting.id).all()
+    notes: list[str] = []
+    for item in items:
+        if item.completion_notes or item.completion_follow_up:
+            line = f"- {item.description}: {item.completion_notes or ''}"
+            if item.completion_follow_up:
+                line += f" (follow-up: {item.completion_follow_up})"
+            notes.append(line)
+    if notes:
+        parts.append("Completion notes:\n" + "\n".join(notes))
+
+    return "\n\n".join(parts)
+
+
+def refresh_follow_ups(meeting_id: str) -> None:
+    """Re-generate a meeting's follow-ups from its current minutes, action
+    items, and completion notes. Used when action items evolve."""
+    db = SessionLocal()
+    try:
+        meeting = db.get(Meeting, meeting_id)
+        if meeting is None:
+            return
+        context = _build_follow_up_context(db, meeting)
+        follow_ups = _parse_follow_ups(ai_service.suggest_follow_ups(context))
+        db.query(MeetingFollowUp).filter(
+            MeetingFollowUp.meeting_id == meeting.id
+        ).delete()
+        for fu in follow_ups:
+            db.add(MeetingFollowUp(meeting_id=meeting.id, **fu))
+        meeting.next_agenda_markdown = _follow_ups_to_markdown(follow_ups) or None
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
 def _row_for_item(db: Session, item: ActionItem) -> str:
     """Build the Markdown table row for a freshly-created ActionItem."""
     from app.services.markdown_sync import build_action_item_row

@@ -44,6 +44,7 @@ from app.services.email_draft import build_email_draft, markdown_to_text  # noqa
 from app.services.markdown_sync import sync_action_item_to_markdown  # noqa: E402
 from app.services.outlook import build_ics  # noqa: E402
 from app.services.processing import (  # noqa: E402
+    _build_follow_up_context,
     _find_duplicate,
     _follow_ups_to_markdown,
     _normalize,
@@ -525,6 +526,25 @@ class TestFollowUps(BaseTestCase):
         md = _follow_ups_to_markdown(parsed)
         self.assertIn("## Suggested Follow-Up", md)
         self.assertIn("Sync on RAF", md)
+
+    def test_build_context_includes_completion_notes(self):
+        team = self._team()
+        meeting = self._meeting(team)
+        meeting.minutes_markdown = "## Summary\nDone things"
+        item = ActionItem(
+            meeting_id=meeting.id,
+            description="Share report",
+            status=ActionItemStatus.DONE.value,
+            completion_notes="Sent to team",
+            completion_follow_up="Schedule review",
+        )
+        self.db.add(item)
+        self.db.flush()
+
+        ctx = _build_follow_up_context(self.db, meeting)
+        self.assertIn("Share report", ctx)
+        self.assertIn("Sent to team", ctx)
+        self.assertIn("Schedule review", ctx)
 
 
 class TestAnalyticsHelpers(BaseTestCase):

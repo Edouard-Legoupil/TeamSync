@@ -51,7 +51,7 @@ from app.services.audit import (
     MEETING_UPLOADED,
 )
 from app.services.file_parser import extract_text
-from app.services.processing import process_meeting
+from app.services.processing import process_meeting, refresh_follow_ups
 from app.services.sanitize import sanitize_markdown
 
 router = APIRouter(prefix="/api/meetings", tags=["meetings"])
@@ -210,6 +210,21 @@ def reprocess_meeting(
     db.commit()
     background.add_task(process_meeting, meeting_id)
     return MeetingCreatedOut(meeting_id=meeting_id, status=MeetingStatus.DRAFT.value)
+
+
+@router.post("/{meeting_id}/follow-ups/refresh", status_code=202)
+def refresh_follow_ups_endpoint(
+    meeting_id: str,
+    background: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    _rate_limit: None = Depends(rate_limit),
+):
+    """Re-derive a meeting's suggested follow-ups from its current state."""
+    meeting = _require_meeting(db, user, meeting_id)
+    _require_owner(db, user, meeting)
+    background.add_task(refresh_follow_ups, meeting_id)
+    return {"queued": True}
 
 
 @router.get("", response_model=list[MeetingListRow])

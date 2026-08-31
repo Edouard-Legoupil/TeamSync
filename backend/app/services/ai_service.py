@@ -69,6 +69,20 @@ Rules:
   use "Unassigned".
 """
 
+_FOLLOW_UP_PROMPT = """You are an expert meeting assistant for a humanitarian organization.
+Given the meeting context below (minutes, action items, and completion notes),
+suggest the next follow-ups.
+
+Return ONLY a JSON object with exactly one field:
+
+{"follow_ups": [{"follow_up_type": "...", "title": "...", "issue": "...", "participants": [...], "rationale": "..."}]}
+
+Rules:
+- "follow_up_type" is one of: meeting, email, document_sharing, one_on_one, ad_hoc.
+- Infer the lightest-weight type that fits; not every action needs a meeting.
+- Only use information present in the context; return an empty array if nothing is needed.
+"""
+
 
 def _client() -> tuple[Any, str]:
     if settings.AZURE_OPENAI_ENDPOINT and settings.AZURE_OPENAI_DEPLOYMENT:
@@ -164,6 +178,32 @@ def process_transcript(transcript: str) -> dict[str, Any]:
         "confidence": _parse_confidence(data.get("confidence")),
         "model": getattr(completion, "model", settings.OPENAI_MODEL),
     }
+
+
+def suggest_follow_ups(context: str) -> list[dict[str, Any]]:
+    """Re-derive suggested follow-ups from the current meeting context."""
+    client, kind = _client()
+    messages = [
+        {"role": "system", "content": _FOLLOW_UP_PROMPT},
+        {"role": "user", "content": context},
+    ]
+
+    kwargs: dict[str, Any] = {"temperature": 0.2}
+    if kind == "azure":
+        kwargs["model"] = settings.AZURE_OPENAI_DEPLOYMENT
+        completion = client.chat.completions.create(messages=messages, **kwargs)
+    else:
+        kwargs["model"] = settings.OPENAI_MODEL
+        completion = client.chat.completions.create(
+            messages=messages, response_format={"type": "json_object"}, **kwargs
+        )
+
+    content = completion.choices[0].message.content or ""
+    try:
+        data = _extract_json(content)
+    except ValueError:
+        data = {"follow_ups": []}
+    return data.get("follow_ups") or []
 
 
 # --- Action item table parsing ----------------------------------------------
