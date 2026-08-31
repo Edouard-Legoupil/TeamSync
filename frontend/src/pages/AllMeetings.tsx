@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CalendarDays } from 'lucide-react'
 import { api } from '../api/client'
-import { useAuth } from '../auth/AuthContext'
+import { ALL_TEAMS, useAuth } from '../auth/AuthContext'
 import type { MeetingListRow } from '../api/types'
 import { Button } from '../components/ui/Button'
 import {
@@ -28,9 +28,9 @@ export default function AllMeetings() {
     if (!currentTeamId) return
     setLoading(true)
     try {
-      const { data } = await api.get<MeetingListRow[]>(
-        `/teams/${currentTeamId}/meetings`,
-      )
+      const url =
+        currentTeamId === ALL_TEAMS ? '/meetings' : `/teams/${currentTeamId}/meetings`
+      const { data } = await api.get<MeetingListRow[]>(url)
       setMeetings(data)
     } catch {
       toast('Could not load meetings', 'error')
@@ -55,7 +55,11 @@ export default function AllMeetings() {
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-navy-900">All Meetings</h1>
-        <p className="text-sm text-muted">Every transcript processed for this team.</p>
+        <p className="text-sm text-muted">
+          {currentTeamId === ALL_TEAMS
+            ? 'Every transcript processed across your teams.'
+            : 'Every transcript processed for this team.'}
+        </p>
       </div>
 
       {meetings.length ? (
@@ -66,6 +70,8 @@ export default function AllMeetings() {
                 <tr className="border-b border-line bg-canvas/50 text-left text-xs uppercase tracking-wide text-muted">
                   <th className="px-4 py-3 font-semibold">Date</th>
                   <th className="px-4 py-3 font-semibold">Title</th>
+                  <th className="px-4 py-3 font-semibold">Team</th>
+                  <th className="px-4 py-3 font-semibold">Series</th>
                   <th className="px-4 py-3 font-semibold"># Actions</th>
                   <th className="px-4 py-3 font-semibold">Status</th>
                 </tr>
@@ -82,6 +88,10 @@ export default function AllMeetings() {
                     </td>
                     <td className="px-4 py-3 font-medium text-navy-900">
                       {meeting.title}
+                    </td>
+                    <td className="px-4 py-3 text-muted">{meeting.team_name}</td>
+                    <td className="px-4 py-3 text-muted">
+                      {meeting.series_name ?? '—'}
                     </td>
                     <td className="px-4 py-3 text-muted">{meeting.action_count}</td>
                     <td className="px-4 py-3">

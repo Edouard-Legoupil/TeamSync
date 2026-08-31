@@ -10,6 +10,22 @@ import { useToast } from '../components/ui/Toast'
 const ROLES = ['SUPER_ADMIN', 'SUPERVISOR', 'MEMBER']
 const MEMBER_ROLES = ['LEAD', 'CONTRIBUTOR', 'VIEWER']
 
+function descendantIds(teamId: string, teams: AdminTeam[]): Set<string> {
+  const result = new Set<string>()
+  let frontier = [teamId]
+  while (frontier.length) {
+    const next: string[] = []
+    for (const t of teams) {
+      if (t.parent_team_id && frontier.includes(t.parent_team_id) && !result.has(t.id)) {
+        result.add(t.id)
+        next.push(t.id)
+      }
+    }
+    frontier = next
+  }
+  return result
+}
+
 type Tab = 'users' | 'teams'
 
 export default function AdminPage() {
@@ -22,7 +38,10 @@ export default function AdminPage() {
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
   const [members, setMembers] = useState<AdminMember[]>([])
   const [newTeamName, setNewTeamName] = useState('')
+  const [newTeamParentId, setNewTeamParentId] = useState('')
   const [rename, setRename] = useState('')
+  const [editDescription, setEditDescription] = useState('')
+  const [editParentId, setEditParentId] = useState('')
   const [newMemberId, setNewMemberId] = useState('')
   const [newMemberRole, setNewMemberRole] = useState('VIEWER')
 
@@ -69,8 +88,12 @@ export default function AdminPage() {
     const name = newTeamName.trim()
     if (!name) return
     try {
-      await api.post('/admin/teams', { name })
+      await api.post('/admin/teams', {
+        name,
+        parent_team_id: newTeamParentId || null,
+      })
       setNewTeamName('')
+      setNewTeamParentId('')
       await loadTeams()
       toast('Team created', 'success')
     } catch {
@@ -78,15 +101,19 @@ export default function AdminPage() {
     }
   }
 
-  async function saveRename() {
+  async function saveTeam() {
     const name = rename.trim()
     if (!name || !selectedTeamId) return
     try {
-      await api.patch(`/admin/teams/${selectedTeamId}`, { name })
+      await api.patch(`/admin/teams/${selectedTeamId}`, {
+        name,
+        description: editDescription.trim() || null,
+        parent_team_id: editParentId || null,
+      })
       await loadTeams()
-      toast('Team renamed', 'success')
+      toast('Team updated', 'success')
     } catch {
-      toast('Could not rename team', 'error')
+      toast('Could not update team', 'error')
     }
   }
 
@@ -104,6 +131,8 @@ export default function AdminPage() {
   function selectTeam(team: AdminTeam) {
     setSelectedTeamId(team.id)
     setRename(team.name)
+    setEditDescription(team.description ?? '')
+    setEditParentId(team.parent_team_id ?? '')
     loadMembers(team.id)
   }
 
@@ -153,6 +182,12 @@ export default function AdminPage() {
 
   const memberIds = new Set(members.map((m) => m.user_id))
   const addableUsers = users.filter((u) => !memberIds.has(u.id))
+  const blockedParentIds = selectedTeamId
+    ? descendantIds(selectedTeamId, teams)
+    : new Set<string>()
+  const parentOptions = teams.filter(
+    (t) => t.id !== selectedTeamId && !blockedParentIds.has(t.id),
+  )
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -244,6 +279,18 @@ export default function AdminPage() {
                 Create
               </Button>
             </div>
+            <select
+              value={newTeamParentId}
+              onChange={(e) => setNewTeamParentId(e.target.value)}
+              className="mt-2 w-full rounded-md border border-line px-3 py-2 text-sm text-navy-900 focus:border-primary-500 focus:outline-none"
+            >
+              <option value="">No parent (top-level)</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  Child of {t.name}
+                </option>
+              ))}
+            </select>
 
             <ul className="mt-4 space-y-2">
               {teams.map((team) => (
@@ -280,14 +327,46 @@ export default function AdminPage() {
           <div>
             {selectedTeamId ? (
               <Card>
-                <div className="mb-4 flex gap-2">
-                  <input
-                    value={rename}
-                    onChange={(e) => setRename(e.target.value)}
-                    className="min-w-0 flex-1 rounded-md border border-line px-3 py-2 text-sm text-navy-900 focus:border-primary-500 focus:outline-none"
-                  />
-                  <Button variant="secondary" onClick={saveRename}>
-                    Rename
+                <div className="mb-4 space-y-3">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
+                      Name
+                    </label>
+                    <input
+                      value={rename}
+                      onChange={(e) => setRename(e.target.value)}
+                      className="w-full rounded-md border border-line px-3 py-2 text-sm text-navy-900 focus:border-primary-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
+                      Description
+                    </label>
+                    <input
+                      value={editDescription}
+                      onChange={(e) => setEditDescription(e.target.value)}
+                      className="w-full rounded-md border border-line px-3 py-2 text-sm text-navy-900 focus:border-primary-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
+                      Parent team
+                    </label>
+                    <select
+                      value={editParentId}
+                      onChange={(e) => setEditParentId(e.target.value)}
+                      className="w-full rounded-md border border-line px-3 py-2 text-sm text-navy-900 focus:border-primary-500 focus:outline-none"
+                    >
+                      <option value="">No parent (top-level)</option>
+                      {parentOptions.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <Button onClick={saveTeam} disabled={!rename.trim()}>
+                    Save team
                   </Button>
                 </div>
 

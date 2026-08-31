@@ -12,6 +12,8 @@ import type { MeResponse, Team, User } from '../api/types'
 
 const TEAM_STORAGE_KEY = 'teamsync:teamId'
 
+export const ALL_TEAMS = '__all__'
+
 interface AuthContextValue {
   user: User | null
   teams: Team[]
@@ -37,7 +39,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(data.user)
       setTeams(data.teams)
       const stored = localStorage.getItem(TEAM_STORAGE_KEY)
-      const valid = stored && data.teams.some((t) => t.id === stored)
+      const valid =
+        stored === ALL_TEAMS || (!!stored && data.teams.some((t) => t.id === stored))
       setCurrentTeamId(valid ? stored : data.primary_team_id)
     } catch {
       setUser(null)

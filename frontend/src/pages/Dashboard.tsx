@@ -1,24 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CheckSquare, FolderOpen, Upload, Users } from 'lucide-react'
+import { FolderOpen, Upload, Users } from 'lucide-react'
 import { api } from '../api/client'
-import { useAuth } from '../auth/AuthContext'
-import type { ActionItem, DashboardData, MeetingDetail } from '../api/types'
+import { ALL_TEAMS, useAuth } from '../auth/AuthContext'
+import type {
+  ActionItem,
+  AllDashboardData,
+  DashboardData,
+  MeetingDetail,
+} from '../api/types'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
-import {
-  Badge,
-  meetingStatusLabel,
-  meetingStatusVariant,
-  priorityVariant,
-} from '../components/ui/Badge'
+import { Badge } from '../components/ui/Badge'
 import { EmptyState } from '../components/ui/EmptyState'
 import { Spinner } from '../components/ui/Spinner'
 import { useProgress } from '../components/ui/Progress'
 import { useToast } from '../components/ui/Toast'
 import { UploadModal } from '../components/UploadModal'
-import { Markdown } from '../components/Markdown'
-import { formatDate, formatDueDate, weekLabel } from '../lib/format'
+import { ActionItemsList } from '../components/ActionItemsList'
+import { ActionItemModal } from '../components/ActionItemModal'
+import { formatDate, weekLabel } from '../lib/format'
 
 const MAX_POLLS = 40 // ~100 seconds at 2.5s intervals
 
@@ -28,26 +29,30 @@ export default function Dashboard() {
   const { toast } = useToast()
   const progress = useProgress()
 
-  const [data, setData] = useState<DashboardData | null>(null)
+  const [data, setData] = useState<DashboardData | AllDashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [pendingId, setPendingId] = useState<string | null>(null)
+  const [selectedItem, setSelectedItem] = useState<ActionItem | null>(null)
   const pollCount = useRef(0)
+
+  const isAllTeams = currentTeamId === ALL_TEAMS
 
   const load = useCallback(async () => {
     if (!currentTeamId) return
     setLoading(true)
     try {
-      const { data: d } = await api.get<DashboardData>(
-        `/teams/${currentTeamId}/dashboard`,
-      )
+      const url = isAllTeams
+        ? '/teams/dashboard'
+        : `/teams/${currentTeamId}/dashboard`
+      const { data: d } = await api.get<DashboardData | AllDashboardData>(url)
       setData(d)
     } catch {
       toast('Could not load dashboard', 'error')
     } finally {
       setLoading(false)
     }
-  }, [currentTeamId, toast])
+  }, [currentTeamId, isAllTeams, toast])
 
   useEffect(() => {
     load()
@@ -98,15 +103,6 @@ export default function Dashboard() {
     }
   }, [pendingId, load, progress, toast])
 
-  async function toggleDone(item: ActionItem) {
-    try {
-      await api.patch(`/action-items/${item.id}`, { status: 'DONE' })
-      await load()
-    } catch {
-      toast('Could not update action item', 'error')
-    }
-  }
-
   if (!currentTeamId) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-20 sm:px-6">
@@ -127,10 +123,11 @@ export default function Dashboard() {
     )
   }
 
-  const teamName =
-    data?.team_info.name ??
-    teams.find((t) => t.id === currentTeamId)?.name ??
-    'Your team'
+  const teamName = isAllTeams
+    ? 'All teams'
+    : data && 'team_info' in data
+      ? data.team_info.name
+      : teams.find((t) => t.id === currentTeamId)?.name ?? 'Your team'
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
@@ -141,10 +138,12 @@ export default function Dashboard() {
           <p className="text-sm text-muted">{weekLabel()}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => setUploadOpen(true)}>
-            <Upload className="h-4 w-4" />
-            Upload Transcript
-          </Button>
+          {!isAllTeams && (
+            <Button onClick={() => setUploadOpen(true)}>
+              <Upload className="h-4 w-4" />
+              Upload Transcript
+            </Button>
+          )}
           <Button variant="ghost" onClick={() => navigate('/meetings')}>
             View All Meetings
           </Button>
@@ -178,9 +177,14 @@ export default function Dashboard() {
                       </p>
                       <p className="text-xs text-muted">{formatDate(meeting.date)}</p>
                     </div>
-                    <Badge variant={meetingStatusVariant(meeting.status)}>
-                      {meetingStatusLabel(meeting.status)}
-                    </Badge>
+                    <div className="flex shrink-0 flex-wrap items-center gap-1">
+                      {meeting.team_name && (
+                        <Badge variant="neutral">{meeting.team_name}</Badge>
+                      )}
+                      {meeting.series_name && (
+                        <Badge variant="neutral">{meeting.series_name}</Badge>
+                      )}
+                    </div>
                   </button>
                 </li>
               ))}
@@ -191,64 +195,62 @@ export default function Dashboard() {
               title="No meetings yet"
               description="Upload a transcript to generate your first structured minutes."
               action={
-                <Button onClick={() => setUploadOpen(true)}>Upload Transcript</Button>
+                !isAllTeams ? (
+                  <Button onClick={() => setUploadOpen(true)}>Upload Transcript</Button>
+                ) : undefined
               }
             />
           )}
         </Card>
 
-        <Card>
+        <div>
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-base font-semibold text-navy-900">Open Action Items</h2>
-            <span className="text-sm text-muted">
-              {data?.open_action_items.length ?? 0}
-            </span>
+            <button
+              onClick={() => navigate('/items')}
+              className="text-sm font-medium text-primary-700 hover:underline"
+            >
+              View all
+            </button>
           </div>
 
-          {data?.open_action_items.length ? (
-            <ul className="divide-y divide-line">
-              {data.open_action_items.map((item) => (
-                <li key={item.id} className="flex items-start gap-3 py-3">
-                  <input
-                    type="checkbox"
-                    onChange={() => toggleDone(item)}
-                    className="mt-1 h-4 w-4 cursor-pointer rounded border-line accent-primary-600"
-                    aria-label={`Mark "${item.description}" as done`}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm text-navy-900">{item.description}</p>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
-                      <span>{item.assignee_name ?? 'Unassigned'}</span>
-                      <span aria-hidden>·</span>
-                      <span>{formatDueDate(item.due_date)}</span>
-                      {item.overdue && <Badge variant="overdue">Overdue</Badge>}
-                      {item.due_soon && <Badge variant="due_soon">Due soon</Badge>}
-                      <Badge variant={priorityVariant(item.priority)}>
-                        {item.priority}
-                      </Badge>
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState
-              icon={<CheckSquare className="h-8 w-8" />}
-              title="No open action items. Great job!"
-              description="New action items will appear here once transcripts are processed."
-            />
-          )}
-        </Card>
+          <ActionItemsList
+            items={data?.open_action_items ?? []}
+            groupByTeam={isAllTeams}
+            onSelect={setSelectedItem}
+            emptyDescription="New action items will appear here once transcripts are processed."
+            emptyAction={
+              !isAllTeams ? (
+                <Button onClick={() => setUploadOpen(true)}>Upload Transcript</Button>
+              ) : undefined
+            }
+          />
+        </div>
       </div>
 
-      {/* Next agenda preview */}
+      {/* Suggested follow-up */}
       <Card className="mt-6">
-        <h2 className="text-base font-semibold text-navy-900">Next Agenda</h2>
-        {data?.next_agenda_preview ? (
-          <Markdown className="mt-2">{data.next_agenda_preview}</Markdown>
+        <h2 className="text-base font-semibold text-navy-900">Suggested Follow-Up</h2>
+        {data?.follow_ups.length ? (
+          <ul className="mt-2 space-y-3">
+            {data.follow_ups.map((fu) => (
+              <li key={fu.id} className="rounded-md border border-line bg-canvas/30 px-3 py-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="neutral">{fu.follow_up_type.replace('_', ' ')}</Badge>
+                  <span className="text-sm font-medium text-navy-900">{fu.title}</span>
+                </div>
+                {fu.participants?.length ? (
+                  <p className="mt-1 text-xs text-muted">
+                    Participants: {fu.participants.join(', ')}
+                  </p>
+                ) : null}
+                {fu.rationale && <p className="text-xs text-muted">{fu.rationale}</p>}
+              </li>
+            ))}
+          </ul>
         ) : (
           <p className="mt-2 text-sm text-muted">
-            No upcoming agenda. Upload a transcript to generate one.
+            No suggested follow-ups yet. Upload a transcript to generate them.
           </p>
         )}
       </Card>
@@ -256,8 +258,15 @@ export default function Dashboard() {
       <UploadModal
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
-        teamId={currentTeamId}
+        teamId={isAllTeams ? null : currentTeamId}
         onUploaded={handleUploaded}
+      />
+
+      <ActionItemModal
+        item={selectedItem}
+        onClose={() => setSelectedItem(null)}
+        onSaved={load}
+        onOpenMeeting={(item) => navigate(`/meetings/${item.meeting_id}`)}
       />
     </div>
   )

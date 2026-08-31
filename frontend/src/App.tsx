@@ -7,12 +7,12 @@ import { Spinner } from './components/ui/Spinner'
 import { ToastProvider } from './components/ui/Toast'
 import AdminPage from './pages/AdminPage'
 import AllMeetings from './pages/AllMeetings'
+import Analytics from './pages/Analytics'
 import Dashboard from './pages/Dashboard'
 import MeetingDetail from './pages/MeetingDetail'
-import MyItems from './pages/MyItems'
 import Onboarding from './pages/Onboarding'
 import SearchResults from './pages/SearchResults'
-import TeamsPage from './pages/TeamsPage'
+import TeamActionItems from './pages/TeamActionItems'
 
 function FullScreenLoading() {
   return (
@@ -89,18 +89,18 @@ export default function App() {
               }
             />
             <Route
-              path="/my-items"
+              path="/items"
               element={
                 <RequireAuth>
-                  <MyItems />
+                  <TeamActionItems />
                 </RequireAuth>
               }
             />
             <Route
-              path="/teams"
+              path="/analytics"
               element={
                 <RequireAuth>
-                  <TeamsPage />
+                  <Analytics />
                 </RequireAuth>
               }
             />
