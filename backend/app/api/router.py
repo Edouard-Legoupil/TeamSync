@@ -5,13 +5,16 @@ from fastapi import APIRouter
 from app.api.routes import (
     action_items,
     admin,
+    analytics,
     auth,
     export,
     meetings,
+    notifications,
     outlook,
     reports,
     search,
     series,
+    tags,
     teams,
 )
 
@@ -26,3 +29,6 @@ api_router.include_router(search.router)
 api_router.include_router(reports.router)
 api_router.include_router(outlook.router)
 api_router.include_router(admin.router)
+api_router.include_router(tags.router)
+api_router.include_router(notifications.router)
+api_router.include_router(analytics.router)

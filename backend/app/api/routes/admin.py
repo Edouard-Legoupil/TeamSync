@@ -38,6 +38,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 _VALID_ROLES = {r.value for r in UserRole}
 _VALID_MEMBER_ROLES = {r.value for r in TeamMemberRole}
+_VALID_TEAM_KINDS = {"team", "personal", "project", "donor", "operation"}
 
 
 def _team_out(db: Session, team: Team) -> AdminTeamOut:
@@ -51,6 +52,7 @@ def _team_out(db: Session, team: Team) -> AdminTeamOut:
         description=team.description,
         manager_id=team.manager_id,
         parent_team_id=team.parent_team_id,
+        kind=team.kind,
         member_count=count,
     )
 
@@ -137,6 +139,7 @@ def create_team(
         description=payload.description,
         manager_id=payload.manager_id,
         parent_team_id=payload.parent_team_id,
+        kind=payload.kind if payload.kind in _VALID_TEAM_KINDS else "team",
     )
     db.add(team)
     db.flush()
@@ -171,8 +174,26 @@ def update_team(
         team.description = payload.description
     if "manager_id" in fields:
         team.manager_id = payload.manager_id
+    if "kind" in fields and payload.kind is not None and payload.kind in _VALID_TEAM_KINDS:
+        team.kind = payload.kind
     if "parent_team_id" in fields:
-        team.parent_team_id = payload.parent_team_id
+        new_parent = payload.parent_team_id
+        if new_parent == team.id:
+            raise HTTPException(status_code=400, detail="A team cannot be its own parent")
+        if new_parent is not None:
+            parent_team = db.get(Team, new_parent)
+            if parent_team is None:
+                raise HTTPException(status_code=404, detail="Parent team not found")
+            # Walk up from the new parent; reaching the team would create a cycle.
+            cursor = parent_team.parent_team_id
+            while cursor is not None:
+                if cursor == team.id:
+                    raise HTTPException(
+                        status_code=400, detail="Cannot set a descendant as parent"
+                    )
+                ancestor = db.get(Team, cursor)
+                cursor = ancestor.parent_team_id if ancestor else None
+        team.parent_team_id = new_parent
 
     audit.log_audit(
         db,

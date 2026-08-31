@@ -7,10 +7,19 @@ from sqlalchemy.orm import Session
 
 from app.auth.security import decode_access_token
 from app.database import get_db
-from app.models import Team, TeamMember, User
-from app.models.enums import UserRole
+from app.models import MeetingPermission, Team, TeamMember, User
+from app.models.enums import TeamMemberRole, UserRole
 
 ACCESS_TOKEN_COOKIE = "teamsync_access_token"
+
+MEETING_ROLE_OWNER = "owner"
+MEETING_ROLE_CONTRIBUTOR = "contributor"
+MEETING_ROLE_VIEWER = "viewer"
+_VALID_MEETING_ROLES = {
+    MEETING_ROLE_OWNER,
+    MEETING_ROLE_CONTRIBUTOR,
+    MEETING_ROLE_VIEWER,
+}
 
 
 def _extract_token(request: Request) -> str | None:
@@ -107,3 +116,46 @@ def get_primary_team_id(db: Session, user: User) -> str | None:
     preferred = managed & accessible
     pool = sorted(preferred or accessible)
     return pool[0] if pool else None
+
+
+def get_meeting_role(db: Session, user: User, meeting) -> str:
+    """Resolve a user's effective role on a meeting.
+
+    Highest precedence wins: super admin > organizer > explicit per-meeting
+    permission > team manager / LEAD > CONTRIBUTOR > viewer.
+    """
+    if user.role == UserRole.SUPER_ADMIN.value:
+        return MEETING_ROLE_OWNER
+    if meeting.organizer_id == user.id:
+        return MEETING_ROLE_OWNER
+
+    permission = (
+        db.query(MeetingPermission)
+        .filter(
+            MeetingPermission.meeting_id == meeting.id,
+            MeetingPermission.user_id == user.id,
+        )
+        .first()
+    )
+    if permission is not None:
+        return permission.role
+
+    team = db.get(Team, meeting.team_id)
+    if team is not None and team.manager_id == user.id:
+        return MEETING_ROLE_OWNER
+
+    membership = (
+        db.query(TeamMember)
+        .filter(
+            TeamMember.team_id == meeting.team_id,
+            TeamMember.user_id == user.id,
+        )
+        .first()
+    )
+    if membership is not None:
+        if membership.role == TeamMemberRole.LEAD.value:
+            return MEETING_ROLE_OWNER
+        if membership.role == TeamMemberRole.CONTRIBUTOR.value:
+            return MEETING_ROLE_CONTRIBUTOR
+
+    return MEETING_ROLE_VIEWER

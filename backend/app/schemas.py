@@ -27,8 +27,17 @@ class TeamMineOut(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
+    kind: str = "team"
     role: str
     is_manager: bool = False
+
+
+class TeamCreate(BaseModel):
+    """Self-serve workspace/team creation."""
+
+    name: str
+    kind: str = "team"
+    description: Optional[str] = None
 
 
 class MeOut(BaseModel):
@@ -54,6 +63,28 @@ class MeetingSummary(BaseModel):
     title: str
     date: datetime
     status: str
+    team_id: str = ""
+    team_name: str = ""
+    series_id: Optional[str] = None
+    series_name: Optional[str] = None
+
+
+class TagOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    type: str = "thematic"
+
+
+class TagUpsert(BaseModel):
+    name: str
+    type: str = "thematic"
+
+
+class TagCreate(BaseModel):
+    name: str
+    type: str = "thematic"
 
 
 class ActionItemOut(BaseModel):
@@ -74,13 +105,50 @@ class ActionItemOut(BaseModel):
     duplicate_of_title: Optional[str] = None
     duplicate_meeting_id: Optional[str] = None
     duplicate_meeting_title: Optional[str] = None
+    team_id: str = ""
+    team_name: str = ""
+    series_id: Optional[str] = None
+    series_name: Optional[str] = None
+    meeting_title: str = ""
+    tags: list[TagOut] = []
+    source_excerpt: Optional[str] = None
+    source_speaker: Optional[str] = None
+    source_timestamp: Optional[str] = None
+    confidence: Optional[float] = None
+    attribution_method: Optional[str] = None
+    requester: Optional[str] = None
+    related_participants: Optional[list[str]] = None
+    completion_notes: Optional[str] = None
+    completion_links: Optional[str] = None
+    completion_follow_up: Optional[str] = None
+
+
+class MeetingFollowUpOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    follow_up_type: str
+    title: str
+    issue: Optional[str] = None
+    participants: Optional[list[str]] = None
+    rationale: Optional[str] = None
+    status: str = "suggested"
+    created_at: datetime
 
 
 class DashboardOut(BaseModel):
     team_info: TeamInfo
     recent_meetings: list[MeetingSummary] = []
     open_action_items: list[ActionItemOut] = []
-    next_agenda_preview: str = ""
+    follow_ups: list[MeetingFollowUpOut] = []
+
+
+class AllDashboardOut(BaseModel):
+    """Aggregated dashboard across every team the user can access."""
+
+    recent_meetings: list[MeetingSummary] = []
+    open_action_items: list[ActionItemOut] = []
+    follow_ups: list[MeetingFollowUpOut] = []
 
 
 class MeetingDetailOut(BaseModel):
@@ -96,7 +164,23 @@ class MeetingDetailOut(BaseModel):
     minutes_markdown: Optional[str] = None
     action_items_markdown: Optional[str] = None
     next_agenda_markdown: Optional[str] = None
+    follow_ups: list[MeetingFollowUpOut] = []
     confidence: Optional[float] = None
+    raw_transcript: str = ""
+    source_filename: Optional[str] = None
+    my_role: str = "viewer"
+
+
+class MeetingPermissionOut(BaseModel):
+    user_id: str
+    full_name: str
+    email: str
+    role: str
+
+
+class MeetingPermissionUpsert(BaseModel):
+    user_id: str
+    role: str
 
 
 class MeetingListRow(BaseModel):
@@ -105,6 +189,10 @@ class MeetingListRow(BaseModel):
     date: datetime
     status: str
     action_count: int = 0
+    team_id: str = ""
+    team_name: str = ""
+    series_id: Optional[str] = None
+    series_name: Optional[str] = None
 
 
 class MeetingCreatedOut(BaseModel):
@@ -115,9 +203,60 @@ class MeetingCreatedOut(BaseModel):
 # --- Action items -----------------------------------------------------------
 
 class ActionItemUpdate(BaseModel):
+    description: Optional[str] = None
     status: Optional[str] = None
     assignee_id: Optional[str] = None
     due_date: Optional[date] = None
+    priority: Optional[str] = None
+    tags: Optional[list[TagUpsert]] = None
+    completion_notes: Optional[str] = None
+    completion_links: Optional[str] = None
+    completion_follow_up: Optional[str] = None
+
+
+class ActionItemCommentCreate(BaseModel):
+    body: str
+    parent_id: Optional[str] = None
+
+
+class ActionItemCommentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    action_item_id: str
+    author_id: Optional[str] = None
+    author_name: Optional[str] = None
+    body: str
+    parent_id: Optional[str] = None
+    created_at: datetime
+
+
+class NotificationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    kind: str
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    meeting_id: Optional[str] = None
+    text: Optional[str] = None
+    read: bool = False
+    actor_name: Optional[str] = None
+    created_at: datetime
+
+
+class UnreadCountOut(BaseModel):
+    count: int = 0
+
+
+class ActionItemHistoryEntry(BaseModel):
+    type: str  # "change" | "comment"
+    field: Optional[str] = None
+    from_value: Optional[str] = None
+    to_value: Optional[str] = None
+    comment: Optional[str] = None
+    actor_name: Optional[str] = None
+    created_at: datetime
 
 
 # --- Email draft ------------------------------------------------------------
@@ -140,6 +279,9 @@ class MeetingUpdate(BaseModel):
     title: Optional[str] = None
     minutes_markdown: Optional[str] = None
     next_agenda_markdown: Optional[str] = None
+    team_id: Optional[str] = None
+    series_id: Optional[str] = None
+    date: Optional[datetime] = None
 
 
 class MeetingImportRequest(BaseModel):
@@ -177,12 +319,15 @@ class AuditLogOut(BaseModel):
 
 
 class SearchResult(BaseModel):
+    kind: str = "meeting"  # meeting | action_item | follow_up
     meeting_id: str
-    title: str
+    title: str = ""
     date: datetime
-    status: str
-    team_name: str
-    snippet: str
+    status: str = ""
+    team_name: str = ""
+    snippet: str = ""
+    speaker: Optional[str] = None
+    action_item_id: Optional[str] = None
 
 
 class TeamTreeOut(BaseModel):
@@ -199,10 +344,29 @@ class TeamRollupOut(BaseModel):
     recent_meetings: list[MeetingSummary] = []
 
 
+class CountByKey(BaseModel):
+    key: str
+    label: str
+    count: int
+
+
+class AnalyticsOut(BaseModel):
+    open_count: int = 0
+    overdue_count: int = 0
+    by_team: list[CountByKey] = []
+    by_theme: list[CountByKey] = []
+    by_region: list[CountByKey] = []
+    by_assignee: list[CountByKey] = []
+    top_themes: list[CountByKey] = []
+    follow_up_types: list[CountByKey] = []
+
+
 class ActionItemWithContext(ActionItemOut):
-    team_id: str = ""
-    team_name: str = ""
-    meeting_title: str = ""
+    """An action item enriched with its team/series/meeting identification.
+
+    Kept as a distinct response model so the frontend can type it separately,
+    but the fields now live on ``ActionItemOut`` and are always populated.
+    """
 
 
 class DigestItemOut(BaseModel):
@@ -255,6 +419,7 @@ class AdminTeamCreate(BaseModel):
     description: Optional[str] = None
     manager_id: Optional[str] = None
     parent_team_id: Optional[str] = None
+    kind: str = "team"
 
 
 class AdminTeamUpdate(BaseModel):
@@ -262,6 +427,7 @@ class AdminTeamUpdate(BaseModel):
     description: Optional[str] = None
     manager_id: Optional[str] = None
     parent_team_id: Optional[str] = None
+    kind: Optional[str] = None
 
 
 class AdminTeamOut(BaseModel):
@@ -272,6 +438,7 @@ class AdminTeamOut(BaseModel):
     description: Optional[str] = None
     manager_id: Optional[str] = None
     parent_team_id: Optional[str] = None
+    kind: str = "team"
     member_count: int = 0
 
 

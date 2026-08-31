@@ -5,14 +5,30 @@ from __future__ import annotations
 import os
 import re
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from sqlalchemy import nulls_last
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.api.helpers import PRIORITY_ORDER, action_item_out, meeting_detail_out
-from app.auth.dependencies import get_current_user, require_team_access
+from app.api.helpers import (
+    ACTION_ITEM_CONTEXT_LOAD,
+    ACTION_ITEM_TAGS_LOAD,
+    PRIORITY_ORDER,
+    action_item_out,
+    meeting_detail_out,
+    meeting_list_row_out,
+)
+from app.auth.dependencies import (
+    MEETING_ROLE_CONTRIBUTOR,
+    MEETING_ROLE_OWNER,
+    MEETING_ROLE_VIEWER,
+    _VALID_MEETING_ROLES,
+    get_accessible_team_ids,
+    get_current_user,
+    get_meeting_role,
+    require_team_access,
+)
 from app.database import get_db
-from app.models import ActionItem, AuditLog, Meeting, User
+from app.models import ActionItem, AuditLog, Meeting, MeetingPermission, MeetingSeries, User
 from app.models.enums import MeetingStatus
 from app.rate_limit import rate_limit
 from app.schemas import (
@@ -21,10 +37,14 @@ from app.schemas import (
     MeetingCreatedOut,
     MeetingDetailOut,
     MeetingImportRequest,
+    MeetingListRow,
+    MeetingPermissionOut,
+    MeetingPermissionUpsert,
     MeetingUpdate,
 )
 from app.services import audit
 from app.services.audit import (
+    MEETING_DELETED,
     MEETING_IMPORTED,
     MEETING_REPROCESSED,
     MEETING_UPDATED,
@@ -52,6 +72,13 @@ def _require_meeting(db: Session, user: User, meeting_id: str) -> Meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
     require_team_access(db, user, meeting.team_id)
     return meeting
+
+
+def _require_owner(db: Session, user: User, meeting: Meeting) -> None:
+    if get_meeting_role(db, user, meeting) != MEETING_ROLE_OWNER:
+        raise HTTPException(
+            status_code=403, detail="You need owner access to perform this action"
+        )
 
 
 @router.post("/upload", response_model=MeetingCreatedOut, status_code=202)
@@ -94,6 +121,7 @@ def upload_meeting(
         series_id=series_id,
         status=MeetingStatus.DRAFT.value,
         raw_transcript=transcript,
+        source_filename=filename,
     )
     db.add(meeting)
     db.commit()
@@ -167,6 +195,7 @@ def reprocess_meeting(
     meeting = _require_meeting(db, user, meeting_id)
     if not meeting.raw_transcript.strip():
         raise HTTPException(status_code=400, detail="No transcript available to process")
+    _require_owner(db, user, meeting)
 
     meeting.status = MeetingStatus.DRAFT.value
     audit.log_audit(
@@ -183,12 +212,58 @@ def reprocess_meeting(
     return MeetingCreatedOut(meeting_id=meeting_id, status=MeetingStatus.DRAFT.value)
 
 
+@router.get("", response_model=list[MeetingListRow])
+def all_meetings(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Meetings across every team the user can access."""
+    accessible = get_accessible_team_ids(db, user)
+    if not accessible:
+        return []
+
+    meetings = (
+        db.query(Meeting)
+        .options(
+            selectinload(Meeting.action_items),
+            joinedload(Meeting.team),
+            joinedload(Meeting.series),
+        )
+        .filter(Meeting.team_id.in_(accessible))
+        .order_by(Meeting.date.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [meeting_list_row_out(m) for m in meetings]
+
+
 @router.get("/{meeting_id}", response_model=MeetingDetailOut)
 def get_meeting(
     meeting_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     meeting = _require_meeting(db, user, meeting_id)
-    return meeting_detail_out(meeting)
+    detail = meeting_detail_out(meeting)
+    detail.my_role = get_meeting_role(db, user, meeting)
+    return detail
+
+
+@router.get("/{meeting_id}/transcript")
+def meeting_transcript(
+    meeting_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    meeting = _require_meeting(db, user, meeting_id)
+    filename = meeting.source_filename or f"transcript-{meeting_id}.txt"
+    filename = re.sub(r'[\\"\r\n]', "_", filename)
+    return Response(
+        content=meeting.raw_transcript or "",
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
 
 
 @router.patch("/{meeting_id}", response_model=MeetingDetailOut)
@@ -199,6 +274,7 @@ def update_meeting(
     db: Session = Depends(get_db),
 ):
     meeting = _require_meeting(db, user, meeting_id)
+    _require_owner(db, user, meeting)
     fields = payload.model_fields_set
 
     if "title" in fields and payload.title is not None:
@@ -207,6 +283,20 @@ def update_meeting(
         meeting.minutes_markdown = sanitize_markdown(payload.minutes_markdown) or None
     if "next_agenda_markdown" in fields:
         meeting.next_agenda_markdown = sanitize_markdown(payload.next_agenda_markdown) or None
+    if "team_id" in fields and payload.team_id is not None:
+        if payload.team_id != meeting.team_id:
+            require_team_access(db, user, payload.team_id)
+            meeting.team_id = payload.team_id
+    if "series_id" in fields:
+        if payload.series_id is not None:
+            series = db.get(MeetingSeries, payload.series_id)
+            if series is None or series.team_id != meeting.team_id:
+                raise HTTPException(
+                    status_code=400, detail="Series does not belong to this team"
+                )
+        meeting.series_id = payload.series_id
+    if "date" in fields and payload.date is not None:
+        meeting.date = payload.date
 
     audit.log_audit(
         db,
@@ -223,6 +313,121 @@ def update_meeting(
     return meeting_detail_out(meeting)
 
 
+@router.delete("/{meeting_id}")
+def delete_meeting(
+    meeting_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    meeting = _require_meeting(db, user, meeting_id)
+    _require_owner(db, user, meeting)
+    team_id = meeting.team_id
+    audit.log_audit(
+        db,
+        action=MEETING_DELETED,
+        entity_type="meeting",
+        entity_id=meeting.id,
+        actor_id=user.id,
+        team_id=team_id,
+        meeting_id=meeting.id,
+    )
+    db.delete(meeting)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/{meeting_id}/permissions", response_model=list[MeetingPermissionOut])
+def meeting_permissions(
+    meeting_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    meeting = _require_meeting(db, user, meeting_id)
+    _require_owner(db, user, meeting)
+    rows = (
+        db.query(MeetingPermission, User)
+        .join(User, User.id == MeetingPermission.user_id)
+        .filter(MeetingPermission.meeting_id == meeting_id)
+        .order_by(User.full_name)
+        .all()
+    )
+    return [
+        MeetingPermissionOut(
+            user_id=u.id,
+            full_name=u.full_name,
+            email=u.email,
+            role=perm.role,
+        )
+        for perm, u in rows
+    ]
+
+
+@router.post(
+    "/{meeting_id}/permissions", response_model=MeetingPermissionOut, status_code=201
+)
+def upsert_meeting_permission(
+    meeting_id: str,
+    payload: MeetingPermissionUpsert,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    meeting = _require_meeting(db, user, meeting_id)
+    _require_owner(db, user, meeting)
+    if payload.role not in _VALID_MEETING_ROLES:
+        raise HTTPException(status_code=422, detail="Invalid meeting role")
+
+    target = db.get(User, payload.user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if meeting.team_id not in get_accessible_team_ids(db, target):
+        raise HTTPException(
+            status_code=400, detail="User does not have access to this team"
+        )
+
+    permission = (
+        db.query(MeetingPermission)
+        .filter(
+            MeetingPermission.meeting_id == meeting_id,
+            MeetingPermission.user_id == payload.user_id,
+        )
+        .first()
+    )
+    if permission is not None:
+        permission.role = payload.role
+    else:
+        permission = MeetingPermission(
+            meeting_id=meeting_id, user_id=payload.user_id, role=payload.role
+        )
+        db.add(permission)
+    db.commit()
+    db.refresh(permission)
+    return MeetingPermissionOut(
+        user_id=target.id,
+        full_name=target.full_name,
+        email=target.email,
+        role=permission.role,
+    )
+
+
+@router.delete("/{meeting_id}/permissions/{user_id}")
+def delete_meeting_permission(
+    meeting_id: str,
+    user_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    meeting = _require_meeting(db, user, meeting_id)
+    _require_owner(db, user, meeting)
+    permission = (
+        db.query(MeetingPermission)
+        .filter(
+            MeetingPermission.meeting_id == meeting_id,
+            MeetingPermission.user_id == user_id,
+        )
+        .first()
+    )
+    if permission is not None:
+        db.delete(permission)
+        db.commit()
+    return {"ok": True}
+
+
 @router.get("/{meeting_id}/action-items", response_model=list[ActionItemOut])
 def meeting_action_items(
     meeting_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -233,6 +438,8 @@ def meeting_action_items(
         .options(
             joinedload(ActionItem.assignee),
             joinedload(ActionItem.duplicate_of).joinedload(ActionItem.meeting),
+            *ACTION_ITEM_CONTEXT_LOAD,
+            *ACTION_ITEM_TAGS_LOAD,
         )
         .filter(ActionItem.meeting_id == meeting_id)
         .order_by(nulls_last(ActionItem.due_date), PRIORITY_ORDER)
