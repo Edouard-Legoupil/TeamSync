@@ -11,18 +11,20 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import ActionItem, Meeting, User
+from app.models import ActionItem, Meeting, MeetingFollowUp, User
 from app.models.enums import ActionItemStatus, MeetingStatus
 from app.services import ai_service
 from app.services import audit
 from app.services.audit import MEETING_PROCESSED, MEETING_PROCESS_FAILED
 from app.services.sanitize import sanitize_markdown
+from app.services.tagging import parse_action_item_tags, upsert_tag
+from app.services.transcript_parser import find_evidence, parse_segments
 
 
 def _parse_due_date(value: str) -> Optional[date]:
@@ -32,6 +34,21 @@ def _parse_due_date(value: str) -> Optional[date]:
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d %b %Y", "%b %d, %Y"):
         try:
             return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_meeting_date(value: object) -> Optional[datetime]:
+    """Parse the AI-extracted meeting date; None if missing or invalid."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
     return None
@@ -67,6 +84,71 @@ def _build_action_item_rows(db: Session, meeting: Meeting, action_md: str) -> li
 
 def _normalize(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def _parse_action_item_details(value: object) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    if not isinstance(value, list):
+        return result
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        task = str(entry.get("task", "") or "").strip()
+        if task:
+            result[_normalize(task)] = entry
+    return result
+
+
+def _confidence(value: object) -> Optional[float]:
+    try:
+        conf = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, conf))
+
+
+_VALID_FOLLOW_UP_TYPES = {"meeting", "email", "document_sharing", "one_on_one", "ad_hoc"}
+
+
+def _parse_follow_ups(value: object) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    if not isinstance(value, list):
+        return result
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title", "") or "").strip()
+        if not title:
+            continue
+        ftype = str(entry.get("follow_up_type", "ad_hoc") or "").strip().lower()
+        if ftype not in _VALID_FOLLOW_UP_TYPES:
+            ftype = "ad_hoc"
+        participants = entry.get("participants")
+        result.append(
+            {
+                "follow_up_type": ftype,
+                "title": title,
+                "issue": str(entry.get("issue", "") or "").strip() or None,
+                "participants": participants if isinstance(participants, list) else None,
+                "rationale": str(entry.get("rationale", "") or "").strip() or None,
+                "status": "suggested",
+            }
+        )
+    return result
+
+
+def _follow_ups_to_markdown(follow_ups: list[dict[str, Any]]) -> str:
+    if not follow_ups:
+        return ""
+    lines = ["## Suggested Follow-Up"]
+    for fu in follow_ups:
+        lines.append(f"- **{fu['title']}** ({fu['follow_up_type']})")
+        participants = fu.get("participants")
+        if participants:
+            lines.append(f"  - Participants: {', '.join(participants)}")
+        if fu.get("rationale"):
+            lines.append(f"  - Reason: {fu['rationale']}")
+    return "\n".join(lines)
 
 
 def _find_duplicate(db: Session, meeting: Meeting, description: str) -> Optional[str]:
@@ -141,15 +223,29 @@ def process_meeting(meeting_id: str) -> None:
 
         minutes = sanitize_markdown(result["minutes_markdown"])
         action_md = sanitize_markdown(result["action_items_markdown"])
-        agenda_md = sanitize_markdown(result["next_agenda_markdown"])
+
+        parsed_date = _parse_meeting_date(result.get("meeting_date"))
+        if parsed_date is not None:
+            meeting.date = parsed_date
 
         meeting.minutes_markdown = minutes or None
         meeting.action_items_markdown = action_md or None
-        meeting.next_agenda_markdown = agenda_md or None
+
+        # Rebuild suggested follow-ups.
+        follow_ups = _parse_follow_ups(result.get("follow_ups"))
+        db.query(MeetingFollowUp).filter(
+            MeetingFollowUp.meeting_id == meeting.id
+        ).delete()
+        for fu in follow_ups:
+            db.add(MeetingFollowUp(meeting_id=meeting.id, **fu))
+        meeting.next_agenda_markdown = _follow_ups_to_markdown(follow_ups) or None
 
         # Rebuild the trackable ActionItem rows from the Markdown table.
         db.query(ActionItem).filter(ActionItem.meeting_id == meeting.id).delete()
         rows = _build_action_item_rows(db, meeting, action_md or "")
+        tags_by_task = parse_action_item_tags(result.get("action_item_tags"))
+        details_by_task = _parse_action_item_details(result.get("action_item_details"))
+        segments = parse_segments(meeting.raw_transcript)["segments"]
         duplicate_count = 0
         for row in rows:
             duplicate_of = _find_duplicate(db, meeting, row["description"])
@@ -161,6 +257,33 @@ def process_meeting(meeting_id: str) -> None:
             db.flush()
             # Store the exact Markdown row for later in-place syncs.
             item.source_markdown = _row_for_item(db, item)
+            # Attach AI-inferred tags (upsert by name; first write wins on type).
+            for spec in tags_by_task.get(_normalize(row["description"]), []):
+                tag = upsert_tag(db, spec["name"], spec["type"])
+                if tag is not None and tag not in item.tags:
+                    item.tags.append(tag)
+
+            # Ground the item in transcript evidence (#4, #7).
+            detail = details_by_task.get(_normalize(row["description"]), {})
+            excerpt = str(detail.get("excerpt", "") or "").strip() or None
+            item.source_excerpt = excerpt
+            transcript_evidence = find_evidence(segments, excerpt) if excerpt else {}
+            if transcript_evidence.get("speaker") or transcript_evidence.get("timestamp"):
+                item.source_speaker = transcript_evidence.get("speaker")
+                item.source_timestamp = transcript_evidence.get("timestamp")
+                item.attribution_method = "transcript"
+            else:
+                speaker = str(detail.get("speaker", "") or "").strip() or None
+                timestamp = str(detail.get("timestamp", "") or "").strip() or None
+                item.source_speaker = speaker
+                item.source_timestamp = timestamp
+                item.attribution_method = (
+                    "ai" if (speaker or timestamp) else None
+                )
+            item.confidence = _confidence(detail.get("confidence"))
+            item.requester = str(detail.get("requester", "") or "").strip() or None
+            related = detail.get("related_participants")
+            item.related_participants = related if isinstance(related, list) else None
 
         # Carry open items forward from the previous meeting in the series.
         if meeting.series_id:

@@ -18,22 +18,49 @@ from app.config import settings
 SYSTEM_PROMPT = """You are an expert meeting assistant for a humanitarian organization.
 You convert raw meeting transcripts into precise, professional Markdown.
 
-Return ONLY a JSON object with exactly these four fields:
+Return ONLY a JSON object with exactly these seven fields:
 
 {
+  "meeting_date": "YYYY-MM-DD",
   "minutes_markdown": "...",
   "action_items_markdown": "...",
-  "next_agenda_markdown": "...",
+  "action_item_tags": [...],
+  "action_item_details": [...],
+  "follow_ups": [...],
   "confidence": 0.85
 }
 
 Rules:
+- "meeting_date": the date the meeting took place, as ISO "YYYY-MM-DD".
+  Infer it from the transcript (stated date, agenda header, timestamps, etc.).
+  If no date can be determined, use null.
 - "minutes_markdown": structured minutes with "## Summary", "## Discussion Points",
   "## Decisions Made". Use "### " for subsections.
 - "action_items_markdown": a single Markdown table with exactly these columns:
   | Task | Assignee | Due Date | Priority | Status |
   Priority is one of HIGH, MEDIUM, LOW. Status is one of OPEN, IN_PROGRESS, DONE.
-- "next_agenda_markdown": a numbered Markdown list of topics for the next meeting.
+- "action_item_tags": an array with one entry per action item in the table, as
+  {"task": "<exact action item description>", "tags": [{"name": "...", "type": "..."}]}.
+  "type" is one of: thematic, organizational, geographic, process, behavior.
+  Infer tags only from what the transcript supports. Examples: thematic (RAF,
+  Fundraising, Protection, Route-Based Approach), organizational (GPS, DIPS,
+  DERS, MENA), geographic (Libya, Sudan, MENA), process (Reporting, Capacity
+  Building, Donor Relations). If no tag applies, use an empty list.
+- "action_item_details": an array with one entry per action item in the table, as
+  {"task": "<exact action item description>", "excerpt": "<verbatim quote>",
+  "speaker": "<name or null>", "timestamp": "<MM:SS or null>",
+  "requester": "<who raised it or null>", "related_participants": ["..."],
+  "confidence": 0.8}. The excerpt must be a verbatim phrase from the transcript
+  that supports the action item. Infer speaker, timestamp, requester, and
+  related participants from context; use null when not determinable. The
+  per-item confidence reflects how well the transcript supports the item.
+- "follow_ups": an array of suggested follow-ups derived from the open items and
+  discussion. Each entry is {"follow_up_type": "...", "title": "...",
+  "issue": "<what prompted it or null>", "participants": ["..."],
+  "rationale": "<why or null>"}. "follow_up_type" is one of: meeting, email,
+  document_sharing, one_on_one, ad_hoc. Infer the lightest-weight type that
+  fits (not every action needs a meeting). Return an empty array if nothing is
+  needed.
 - Each Markdown field must be RAW Markdown text, not a JSON string wrapping more JSON.
 - "confidence" is a number from 0.0 to 1.0 reflecting how well the transcript
   supports the extracted content (lower when the transcript is noisy or sparse).
@@ -118,16 +145,22 @@ def process_transcript(transcript: str) -> dict[str, Any]:
     except ValueError:
         # Graceful fallback if the model drifted from JSON mode.
         data = {
+            "meeting_date": None,
             "minutes_markdown": content,
             "action_items_markdown": "",
-            "next_agenda_markdown": "",
+            "action_item_tags": [],
+            "action_item_details": [],
+            "follow_ups": [],
             "confidence": 0.0,
         }
 
     return {
+        "meeting_date": data.get("meeting_date"),
         "minutes_markdown": str(data.get("minutes_markdown", "") or ""),
         "action_items_markdown": str(data.get("action_items_markdown", "") or ""),
-        "next_agenda_markdown": str(data.get("next_agenda_markdown", "") or ""),
+        "action_item_tags": data.get("action_item_tags") or [],
+        "action_item_details": data.get("action_item_details") or [],
+        "follow_ups": data.get("follow_ups") or [],
         "confidence": _parse_confidence(data.get("confidence")),
         "model": getattr(completion, "model", settings.OPENAI_MODEL),
     }
