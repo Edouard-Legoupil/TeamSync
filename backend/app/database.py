@@ -38,7 +38,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    """Create tables that do not exist yet.
+    """Create tables that do not exist yet and apply dev column migrations.
 
     NOTE: For production this is a convenience only. Use Alembic (or another
     migration tool) for real schema migrations.
@@ -49,38 +49,63 @@ def init_db() -> None:
     _ensure_dev_columns()
 
 
+# Columns added to existing tables after the initial schema. ``create_all``
+# creates new tables but not new columns on existing tables, so these are
+# applied as best-effort migrations for both SQLite and PostgreSQL.
+_DEV_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "meetings": [
+        ("series_id", "VARCHAR(36)"),
+        ("source_filename", "VARCHAR(500)"),
+    ],
+    "teams": [
+        ("kind", "VARCHAR(32) NOT NULL DEFAULT 'team'"),
+    ],
+    "action_items": [
+        ("duplicate_of_id", "VARCHAR(36)"),
+        ("source_excerpt", "TEXT"),
+        ("source_speaker", "VARCHAR(255)"),
+        ("source_timestamp", "VARCHAR(64)"),
+        ("confidence", "FLOAT"),
+        ("attribution_method", "VARCHAR(32)"),
+        ("requester", "VARCHAR(255)"),
+        ("related_participants", "JSON"),
+        ("completion_notes", "TEXT"),
+        ("completion_links", "TEXT"),
+        ("completion_follow_up", "TEXT"),
+    ],
+    "action_item_comments": [
+        ("parent_id", "VARCHAR(36)"),
+    ],
+}
+
+
 def _ensure_dev_columns() -> None:
-    """Best-effort column migration for an existing SQLite dev database.
+    """Best-effort column migration for an existing dev database.
 
     ``create_all`` creates new tables but does not add columns to existing
     tables. This keeps ``./start.sh`` working after a schema change without
-    forcing developers to delete their local DB. Production uses Alembic.
+    forcing developers to delete their local DB.
     """
-    if not settings.DATABASE_URL.startswith("sqlite"):
+    if settings.DATABASE_URL.startswith("sqlite"):
+        inspector = inspect(engine)
+        for table, columns in _DEV_COLUMNS.items():
+            if table not in inspector.get_table_names():
+                continue
+            existing = {col["name"] for col in inspector.get_columns(table)}
+            for column, ddl_type in columns:
+                if column not in existing:
+                    with engine.begin() as conn:
+                        conn.execute(
+                            text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
+                        )
         return
 
-    inspector = inspect(engine)
-    _ensure_column(inspector, "meetings", "series_id", "VARCHAR(36)")
-    _ensure_column(inspector, "meetings", "source_filename", "VARCHAR(500)")
-    _ensure_column(inspector, "teams", "kind", "VARCHAR(32)")
-    _ensure_column(inspector, "action_items", "duplicate_of_id", "VARCHAR(36)")
-    _ensure_column(inspector, "action_item_comments", "parent_id", "VARCHAR(36)")
-    _ensure_column(inspector, "action_items", "source_excerpt", "TEXT")
-    _ensure_column(inspector, "action_items", "source_speaker", "VARCHAR(255)")
-    _ensure_column(inspector, "action_items", "source_timestamp", "VARCHAR(64)")
-    _ensure_column(inspector, "action_items", "confidence", "FLOAT")
-    _ensure_column(inspector, "action_items", "attribution_method", "VARCHAR(32)")
-    _ensure_column(inspector, "action_items", "requester", "VARCHAR(255)")
-    _ensure_column(inspector, "action_items", "related_participants", "JSON")
-    _ensure_column(inspector, "action_items", "completion_notes", "TEXT")
-    _ensure_column(inspector, "action_items", "completion_links", "TEXT")
-    _ensure_column(inspector, "action_items", "completion_follow_up", "TEXT")
-
-
-def _ensure_column(inspector, table: str, column: str, ddl_type: str) -> None:
-    if table not in inspector.get_table_names():
-        return
-    columns = {col["name"] for col in inspector.get_columns(table)}
-    if column not in columns:
-        with engine.begin() as conn:
-            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
+    # PostgreSQL (and other SQL-standard databases): idempotent column add.
+    with engine.begin() as conn:
+        for table, columns in _DEV_COLUMNS.items():
+            for column, ddl_type in columns:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl_type}"
+                    )
+                )
