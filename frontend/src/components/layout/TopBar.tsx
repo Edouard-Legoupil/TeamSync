@@ -84,6 +84,8 @@ export function TopBar() {
   const currentTeam = teams.find((t) => t.id === currentTeamId)
   const scopeLabel =
     currentTeamId === ALL_TEAMS ? 'All teams' : currentTeam?.name ?? 'Select team'
+  const currentSlug =
+    currentTeamId !== ALL_TEAMS && currentTeam ? currentTeam.slug ?? '' : ''
   const canSeeAnalytics =
     user?.role === 'SUPER_ADMIN' ||
     user?.role === 'SUPERVISOR' ||
@@ -92,7 +94,12 @@ export function TopBar() {
   function selectTeam(id: string) {
     setCurrentTeamId(id)
     setTeamOpen(false)
-    navigate('/team')
+    if (id === ALL_TEAMS) {
+      navigate('/team')
+      return
+    }
+    const team = teams.find((t) => t.id === id)
+    navigate(team?.slug ? `/team/${team.slug}` : '/team')
   }
 
   async function createSpace() {
@@ -105,7 +112,7 @@ export function TopBar() {
       setTeamOpen(false)
       await refresh()
       setCurrentTeamId(data.id)
-      navigate('/team')
+      navigate(data.slug ? `/team/${data.slug}` : '/team')
     } catch {
       // ignore — no toast context here
     }
@@ -125,10 +132,16 @@ export function TopBar() {
           <NavLink to="/team" end className={navClass}>
             Dashboard
           </NavLink>
-          <NavLink to="/meetings" className={navClass}>
+          <NavLink
+            to={currentSlug ? `/team/${currentSlug}/meetings` : '/meetings'}
+            className={navClass}
+          >
             Meetings
           </NavLink>
-          <NavLink to="/items" className={navClass}>
+          <NavLink
+            to={currentSlug ? `/team/${currentSlug}/items` : '/items'}
+            className={navClass}
+          >
             Action Items
           </NavLink>
           {canSeeAnalytics && (

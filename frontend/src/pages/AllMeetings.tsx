@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CalendarDays } from 'lucide-react'
 import { api } from '../api/client'
-import { ALL_TEAMS, useAuth } from '../auth/AuthContext'
+import { useEffectiveTeam } from '../auth/useEffectiveTeam'
 import type { MeetingListRow } from '../api/types'
 import { Button } from '../components/ui/Button'
 import {
@@ -17,7 +17,7 @@ import { useToast } from '../components/ui/Toast'
 import { formatDate } from '../lib/format'
 
 export default function AllMeetings() {
-  const { currentTeamId } = useAuth()
+  const { teamId, isAllTeams } = useEffectiveTeam()
   const navigate = useNavigate()
   const { toast } = useToast()
 
@@ -25,11 +25,10 @@ export default function AllMeetings() {
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
-    if (!currentTeamId) return
+    if (!teamId) return
     setLoading(true)
     try {
-      const url =
-        currentTeamId === ALL_TEAMS ? '/meetings' : `/teams/${currentTeamId}/meetings`
+      const url = isAllTeams ? '/meetings' : `/teams/${teamId}/meetings`
       const { data } = await api.get<MeetingListRow[]>(url)
       setMeetings(data)
     } catch {
@@ -37,7 +36,7 @@ export default function AllMeetings() {
     } finally {
       setLoading(false)
     }
-  }, [currentTeamId, toast])
+  }, [teamId, isAllTeams, toast])
 
   useEffect(() => {
     load()
@@ -56,7 +55,7 @@ export default function AllMeetings() {
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-navy-900">All Meetings</h1>
         <p className="text-sm text-muted">
-          {currentTeamId === ALL_TEAMS
+          {isAllTeams
             ? 'Every transcript processed across your teams.'
             : 'Every transcript processed for this team.'}
         </p>

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Copy, Mail, Users } from 'lucide-react'
 import { api } from '../api/client'
-import { ALL_TEAMS, useAuth } from '../auth/AuthContext'
+import { useAuth } from '../auth/AuthContext'
+import { useEffectiveTeam } from '../auth/useEffectiveTeam'
 import type { ActionItem, Digest } from '../api/types'
 import { ActionItemsList } from '../components/ActionItemsList'
 import { ActionItemModal } from '../components/ActionItemModal'
@@ -13,7 +14,7 @@ import { Spinner } from '../components/ui/Spinner'
 import { useToast } from '../components/ui/Toast'
 
 export default function TeamActionItems() {
-  const { currentTeamId } = useAuth()
+  const { teamId, isAllTeams, notFound } = useEffectiveTeam()
   const navigate = useNavigate()
   const { toast } = useToast()
   const [items, setItems] = useState<ActionItem[]>([])
@@ -22,15 +23,13 @@ export default function TeamActionItems() {
   const [digest, setDigest] = useState<Digest | null>(null)
   const [digestOpen, setDigestOpen] = useState(false)
 
-  const isAllTeams = currentTeamId === ALL_TEAMS
-
   const load = useCallback(async () => {
-    if (!currentTeamId) return
+    if (!teamId) return
     setLoading(true)
     try {
       const url = isAllTeams
         ? '/action-items/mine'
-        : `/teams/${currentTeamId}/action-items`
+        : `/teams/${teamId}/action-items`
       const { data } = await api.get<ActionItem[]>(url)
       setItems(data)
     } catch {
@@ -38,7 +37,7 @@ export default function TeamActionItems() {
     } finally {
       setLoading(false)
     }
-  }, [currentTeamId, isAllTeams, toast])
+  }, [teamId, isAllTeams, toast])
 
   useEffect(() => {
     load()
@@ -64,7 +63,19 @@ export default function TeamActionItems() {
     }
   }
 
-  if (!currentTeamId) {
+  if (notFound) {
+    return (
+      <div className="mx-auto max-w-3xl px-4 py-20 sm:px-6">
+        <EmptyState
+          icon={<Users className="h-8 w-8" />}
+          title="Team not found"
+          description="This team may have been renamed or removed."
+        />
+      </div>
+    )
+  }
+
+  if (!teamId) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-20 sm:px-6">
         <EmptyState

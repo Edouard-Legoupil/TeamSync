@@ -56,6 +56,7 @@ from app.services.transcript_parser import find_evidence, parse_segments  # noqa
 from app.services.notifications import notify_mentions  # noqa: E402
 from app.api.routes.analytics import _group_tags  # noqa: E402
 from app.schemas import AdminTeamOut, TeamMineOut  # noqa: E402
+from app.services.slugify import slugify, unique_slug  # noqa: E402
 from app.services.word_export import markdown_to_docx_bytes  # noqa: E402
 
 
@@ -580,6 +581,19 @@ class TestTeamKindCoercion(BaseTestCase):
             TeamMineOut(id="x", name="T", role="LEAD", kind=None).kind,
             "team",
         )
+
+
+class TestSlug(BaseTestCase):
+    def test_slugify(self):
+        self.assertEqual(slugify("Flexible Funding Report"), "flexible-funding-report")
+        self.assertEqual(slugify("GPS  Team!"), "gps-team")
+        self.assertEqual(slugify(""), "team")
+
+    def test_unique_slug(self):
+        team = self._team("GPS")
+        team.slug = "gps"
+        self.db.flush()
+        self.assertEqual(unique_slug(self.db, "GPS"), "gps-2")
 
 
 class TestExport(BaseTestCase):

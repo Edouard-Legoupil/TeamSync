@@ -59,6 +59,7 @@ _DEV_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
     "teams": [
         ("kind", "VARCHAR(32) NOT NULL DEFAULT 'team'"),
+        ("slug", "VARCHAR(255)"),
     ],
     "action_items": [
         ("duplicate_of_id", "VARCHAR(36)"),
@@ -112,3 +113,24 @@ def _ensure_dev_columns() -> None:
     # Backfill NULL kinds left behind by earlier nullable migrations.
     with engine.begin() as conn:
         conn.execute(text("UPDATE teams SET kind = 'team' WHERE kind IS NULL"))
+
+    # Backfill team slugs for rows created before the slug column existed.
+    from app.models import Team  # noqa: F401 (deferred to avoid import cycle)
+    from app.services.slugify import slugify as _slugify
+
+    with SessionLocal() as db:
+        missing = db.query(Team).filter(Team.slug.is_(None)).all()
+        if missing:
+            used = {
+                t.slug for t in db.query(Team).filter(Team.slug.isnot(None)).all()
+            }
+            for team in missing:
+                base = _slugify(team.name)
+                candidate = base
+                n = 2
+                while candidate in used:
+                    candidate = f"{base}-{n}"
+                    n += 1
+                team.slug = candidate
+                used.add(candidate)
+            db.commit()

@@ -33,6 +33,7 @@ from app.services.audit import (
     TEAM_UPDATED,
     USER_UPDATED,
 )
+from app.services.slugify import unique_slug
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -53,6 +54,7 @@ def _team_out(db: Session, team: Team) -> AdminTeamOut:
         manager_id=team.manager_id,
         parent_team_id=team.parent_team_id,
         kind=team.kind,
+        slug=team.slug,
         member_count=count,
     )
 
@@ -140,6 +142,7 @@ def create_team(
         manager_id=payload.manager_id,
         parent_team_id=payload.parent_team_id,
         kind=payload.kind if payload.kind in _VALID_TEAM_KINDS else "team",
+        slug=unique_slug(db, name),
     )
     db.add(team)
     db.flush()
@@ -169,7 +172,10 @@ def update_team(
 
     fields = payload.model_fields_set
     if "name" in fields and payload.name is not None:
-        team.name = payload.name.strip() or team.name
+        new_name = payload.name.strip() or team.name
+        if new_name != team.name:
+            team.name = new_name
+            team.slug = unique_slug(db, team.name, exclude_team_id=team.id)
     if "description" in fields:
         team.description = payload.description
     if "manager_id" in fields:

@@ -28,6 +28,7 @@ class TeamMineOut(BaseModel):
     name: str
     description: Optional[str] = None
     kind: str = "team"
+    slug: Optional[str] = None
     role: str
     is_manager: bool = False
 
@@ -60,6 +61,7 @@ class TeamInfo(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
+    slug: Optional[str] = None
 
 
 class MeetingSummary(BaseModel):
@@ -445,6 +447,7 @@ class AdminTeamOut(BaseModel):
     manager_id: Optional[str] = None
     parent_team_id: Optional[str] = None
     kind: str = "team"
+    slug: Optional[str] = None
     member_count: int = 0
 
     @field_validator("kind", mode="before")

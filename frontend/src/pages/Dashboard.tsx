@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FolderOpen, Upload, Users } from 'lucide-react'
 import { api } from '../api/client'
-import { ALL_TEAMS, useAuth } from '../auth/AuthContext'
+import { useAuth } from '../auth/AuthContext'
+import { useEffectiveTeam } from '../auth/useEffectiveTeam'
 import type {
   ActionItem,
   AllDashboardData,
@@ -24,7 +25,8 @@ import { formatDate, weekLabel } from '../lib/format'
 const MAX_POLLS = 40 // ~100 seconds at 2.5s intervals
 
 export default function Dashboard() {
-  const { currentTeamId, teams } = useAuth()
+  const { teams } = useAuth()
+  const { teamId, isAllTeams, notFound } = useEffectiveTeam()
   const navigate = useNavigate()
   const { toast } = useToast()
   const progress = useProgress()
@@ -36,15 +38,13 @@ export default function Dashboard() {
   const [selectedItem, setSelectedItem] = useState<ActionItem | null>(null)
   const pollCount = useRef(0)
 
-  const isAllTeams = currentTeamId === ALL_TEAMS
-
   const load = useCallback(async () => {
-    if (!currentTeamId) return
+    if (!teamId) return
     setLoading(true)
     try {
       const url = isAllTeams
         ? '/teams/dashboard'
-        : `/teams/${currentTeamId}/dashboard`
+        : `/teams/${teamId}/dashboard`
       const { data: d } = await api.get<DashboardData | AllDashboardData>(url)
       setData(d)
     } catch {
@@ -52,7 +52,7 @@ export default function Dashboard() {
     } finally {
       setLoading(false)
     }
-  }, [currentTeamId, isAllTeams, toast])
+  }, [teamId, isAllTeams, toast])
 
   useEffect(() => {
     load()
@@ -103,7 +103,19 @@ export default function Dashboard() {
     }
   }, [pendingId, load, progress, toast])
 
-  if (!currentTeamId) {
+  if (notFound) {
+    return (
+      <div className="mx-auto max-w-3xl px-4 py-20 sm:px-6">
+        <EmptyState
+          icon={<Users className="h-8 w-8" />}
+          title="Team not found"
+          description="This team may have been renamed or removed."
+        />
+      </div>
+    )
+  }
+
+  if (!teamId) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-20 sm:px-6">
         <EmptyState
@@ -127,7 +139,7 @@ export default function Dashboard() {
     ? 'All teams'
     : data && 'team_info' in data
       ? data.team_info.name
-      : teams.find((t) => t.id === currentTeamId)?.name ?? 'Your team'
+      : teams.find((t) => t.id === teamId)?.name ?? 'Your team'
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
@@ -258,7 +270,7 @@ export default function Dashboard() {
       <UploadModal
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
-        teamId={isAllTeams ? null : currentTeamId}
+        teamId={isAllTeams ? null : teamId}
         onUploaded={handleUploaded}
       />
 

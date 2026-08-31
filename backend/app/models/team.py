@@ -29,6 +29,10 @@ class Team(TimestampMixin, Base):
     )
     # Workspace kind: team | personal | project | donor | operation.
     kind: Mapped[str] = mapped_column(String(32), nullable=False, default="team")
+    # Stable URL slug for permalinks (backfilled for legacy rows).
+    slug: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, unique=True, index=True
+    )
 
     # --- relationships ------------------------------------------------------
     manager: Mapped[Optional["User"]] = relationship(

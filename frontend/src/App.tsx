@@ -73,6 +73,30 @@ export default function App() {
               }
             />
             <Route
+              path="/team/:slug"
+              element={
+                <RequireAuth>
+                  <Dashboard />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/team/:slug/items"
+              element={
+                <RequireAuth>
+                  <TeamActionItems />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/team/:slug/meetings"
+              element={
+                <RequireAuth>
+                  <AllMeetings />
+                </RequireAuth>
+              }
+            />
+            <Route
               path="/meetings"
               element={
                 <RequireAuth>

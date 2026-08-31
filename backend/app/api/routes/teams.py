@@ -38,6 +38,7 @@ from app.schemas import (
 )
 from app.services import audit
 from app.services.audit import TEAM_CREATED
+from app.services.slugify import unique_slug
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
@@ -70,6 +71,7 @@ def my_teams(user: User = Depends(get_current_user), db: Session = Depends(get_d
                 name=team.name,
                 description=team.description,
                 kind=team.kind,
+                slug=team.slug,
                 role=role,
                 is_manager=is_manager,
             )
@@ -95,6 +97,7 @@ def create_team(
         description=payload.description,
         kind=payload.kind,
         manager_id=user.id,
+        slug=unique_slug(db, name),
     )
     db.add(team)
     db.flush()
@@ -116,6 +119,7 @@ def create_team(
         name=team.name,
         description=team.description,
         kind=team.kind,
+        slug=team.slug,
         role=TeamMemberRole.LEAD.value,
         is_manager=True,
     )
@@ -419,6 +423,7 @@ def join_team(team_id: str, user: User = Depends(get_current_user), db: Session 
         name=team.name,
         description=team.description,
         kind=team.kind,
+        slug=team.slug,
         role=membership.role,
         is_manager=team.manager_id == user.id,
     )

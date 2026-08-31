@@ -12,6 +12,7 @@ export interface Team {
   name: string
   description: string | null
   kind: string
+  slug: string | null
   role: string
   is_manager: boolean
 }
