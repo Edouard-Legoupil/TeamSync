@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 # --- User & auth ------------------------------------------------------------
@@ -30,6 +30,12 @@ class TeamMineOut(BaseModel):
     kind: str = "team"
     role: str
     is_manager: bool = False
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _default_kind(cls, value: object) -> str:
+        # Legacy rows may have NULL kind from before the column existed.
+        return value or "team"
 
 
 class TeamCreate(BaseModel):
@@ -440,6 +446,12 @@ class AdminTeamOut(BaseModel):
     parent_team_id: Optional[str] = None
     kind: str = "team"
     member_count: int = 0
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _default_kind(cls, value: object) -> str:
+        # Legacy rows may have NULL kind from before the column existed.
+        return value or "team"
 
 
 class AdminMemberOut(BaseModel):

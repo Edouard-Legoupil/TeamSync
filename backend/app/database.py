@@ -98,14 +98,17 @@ def _ensure_dev_columns() -> None:
                         conn.execute(
                             text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
                         )
-        return
-
-    # PostgreSQL (and other SQL-standard databases): idempotent column add.
-    with engine.begin() as conn:
-        for table, columns in _DEV_COLUMNS.items():
-            for column, ddl_type in columns:
-                conn.execute(
-                    text(
-                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl_type}"
+    else:
+        # PostgreSQL (and other SQL-standard databases): idempotent column add.
+        with engine.begin() as conn:
+            for table, columns in _DEV_COLUMNS.items():
+                for column, ddl_type in columns:
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl_type}"
+                        )
                     )
-                )
+
+    # Backfill NULL kinds left behind by earlier nullable migrations.
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE teams SET kind = 'team' WHERE kind IS NULL"))

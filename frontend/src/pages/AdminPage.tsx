@@ -94,10 +94,15 @@ export default function AdminPage() {
       })
       setNewTeamName('')
       setNewTeamParentId('')
-      await loadTeams()
       toast('Team created', 'success')
     } catch {
       toast('Could not create team', 'error')
+      return
+    }
+    try {
+      await loadTeams()
+    } catch {
+      toast('Team created, but the list could not be refreshed', 'error')
     }
   }
 

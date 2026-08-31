@@ -55,6 +55,7 @@ from app.services.tagging import parse_action_item_tags, upsert_tag  # noqa: E40
 from app.services.transcript_parser import find_evidence, parse_segments  # noqa: E402
 from app.services.notifications import notify_mentions  # noqa: E402
 from app.api.routes.analytics import _group_tags  # noqa: E402
+from app.schemas import AdminTeamOut, TeamMineOut  # noqa: E402
 from app.services.word_export import markdown_to_docx_bytes  # noqa: E402
 
 
@@ -566,6 +567,19 @@ class TestAnalyticsHelpers(BaseTestCase):
         self.assertEqual(thematic[0].label, "RAF")
         self.assertEqual(thematic[0].count, 1)
         self.assertEqual(_group_tags([item], "geographic"), [])
+
+
+class TestTeamKindCoercion(BaseTestCase):
+    def test_null_kind_coerces_to_team(self):
+        # Legacy rows created before the kind column existed hold NULL.
+        self.assertEqual(
+            AdminTeamOut(id="x", name="T", kind=None).kind,
+            "team",
+        )
+        self.assertEqual(
+            TeamMineOut(id="x", name="T", role="LEAD", kind=None).kind,
+            "team",
+        )
 
 
 class TestExport(BaseTestCase):
